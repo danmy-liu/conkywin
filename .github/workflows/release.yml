@@ -1,10 +1,16 @@
 name: Release
 
 # 推送 v* 标签时自动编译、打包自包含发行包，并创建 GitHub Release
+# 也可在 Actions 页面手动 Run workflow，指定标签重发某个版本
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的标签（例如 v1.0.1），留空则用当前引用'
+        required: false
 
 permissions:
   contents: write
@@ -36,7 +42,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ConkyWin v${{ steps.ver.outputs.version }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: dist/ConkyWin-${{ steps.ver.outputs.version }}-win-x64.zip
           generate_release_notes: false
           body: |
