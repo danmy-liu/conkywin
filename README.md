@@ -41,7 +41,7 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 
 1. 下载最新的 `ConkyWin-x.x.x-win-x64.zip`（国内推荐 Gitee，速度更快）：
    - Gitee：[gitee.com/danmyleo/conkywin/releases](https://gitee.com/danmyleo/conkywin/releases)
-   - GitHub：[github.com/danmyleo/conkywin/releases](https://github.com/danmyleo/conkywin/releases)
+   - GitHub：[github.com/danmy-liu/conkywin/releases](https://github.com/danmy-liu/conkywin/releases)
 2. 解压到任意目录（建议固定位置，如 `D:\Tools\ConkyWin`——开机自启要用这个路径）
 3. 双击 `ConkyWin.exe`，面板出现在屏幕右侧
 4. 想改样式就编辑同目录的 `config.json` / `script.lua`，**保存即生效**，不用重启
