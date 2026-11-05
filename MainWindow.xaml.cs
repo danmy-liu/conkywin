@@ -80,6 +80,9 @@ namespace ConkyWin
                 _posTimer.Tick += (s2, e2) => { try { PlaceWindow(); } catch { } };
                 _posTimer.Start();
 
+                // 内容高度变化（天气加载、行数增减）后重新做屏幕内钳制
+                SizeChanged += (s2, e2) => { try { PlaceWindow(); } catch { } };
+
                 // 内置面板控件缓存（完整脚本模式会清空 RootPanel，切回来时要还原）
                 _builtinChildren = RootPanel.Children.Cast<UIElement>().ToList();
 
@@ -448,20 +451,32 @@ namespace ConkyWin
             public bool IsColumns;
             public Border Sep;
             public TextBlock Label, Value;
+            public Image ValueIcon;
             public Border BarBg;
             public System.Windows.Shapes.Rectangle Bar;
             public Canvas GraphCanvas;
+            public System.Windows.Shapes.Polygon GraphArea;   // 曲线图元复用（避免每帧重建控件导致闪烁）
+            public System.Windows.Shapes.Polyline GraphLine;
+            public string GraphColorStr;
+            public double GraphH;
             public TextBlock[] CellLabels, CellTexts, CellSubs;
+            public Image[] CellIcons;
         }
 
         private readonly List<DynRow> _dynRows = new List<DynRow>();
         private readonly List<string> _dynSigs = new List<string>();
 
+        /// <summary>
+        /// 行的控件结构签名——只包含影响"控件类型"的字段。
+        /// 注意不能含 label/text 等动态内容：Top 进程行的 label 是进程名，采样排序一变
+        /// 就会触发整面板重建（RootPanel.Clear），表现就是每隔几秒闪一次、曲线清空重画。
+        /// </summary>
         private static string RowSig(ScriptHost.Row r)
         {
             if (r.Gap > 0) return "gap";
             if (r.Cells != null && r.Cells.Count > 0) return "cols" + r.Cells.Count;
-            return r.Hr ? "hr" : r.Label + "|" + (r.Graph != null ? "g" + r.GraphHeight : "") + (r.Bar.HasValue ? "b" : "");
+            return (r.Hr ? "hr" : "row") + (r.Graph != null ? "|g" + r.GraphHeight : "") +
+                   (r.Bar.HasValue ? "|b" : "") + (r.Icon != null ? "|i" : "");
         }
 
         private void RenderScriptPanel()
@@ -523,6 +538,7 @@ namespace ConkyWin
                 dr.CellLabels = new TextBlock[r.Cells.Count];
                 dr.CellTexts = new TextBlock[r.Cells.Count];
                 dr.CellSubs = new TextBlock[r.Cells.Count];
+                dr.CellIcons = new Image[r.Cells.Count];
                 for (int i = 0; i < r.Cells.Count; i++)
                 {
                     var c = r.Cells[i];
@@ -545,6 +561,23 @@ namespace ConkyWin
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 2)
                     };
+                    col.Children.Add(l);
+                    col.Children.Add(v);
+                    if (c.Icon != null)
+                    {
+                        var ci = new Image
+                        {
+                            Width = c.IconSize,
+                            Height = c.IconSize,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            Margin = new Thickness(0, 1, 0, 3)
+                        };
+                        var src = LoadIcon(c.Icon);
+                        if (src != null) ci.Source = src;
+                        col.Children.Add(ci);
+                        dr.CellIcons[i] = ci;
+                        v.Visibility = Visibility.Collapsed; // 图片与文本符号二选一
+                    }
                     var s = new TextBlock
                     {
                         Text = c.Sub,
@@ -553,8 +586,6 @@ namespace ConkyWin
                         Foreground = Brush(c.Color ?? "#EAF2FC"),
                         HorizontalAlignment = HorizontalAlignment.Center
                     };
-                    col.Children.Add(l);
-                    col.Children.Add(v);
                     col.Children.Add(s);
                     Grid.SetColumn(col, i);
                     grid.Children.Add(col);
@@ -603,9 +634,25 @@ namespace ConkyWin
                 };
                 grid.Children.Add(label);
                 grid.Children.Add(value);
-                RootPanel.Children.Add(grid);
                 dr.Label = label;
                 dr.Value = value;
+                if (r.Icon != null)
+                {
+                    var img = new Image
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(0, 0, 4, 0),
+                        Width = r.IconSize,
+                        Height = r.IconSize
+                    };
+                    var src = LoadIcon(r.Icon);
+                    if (src != null) img.Source = src;
+                    grid.Children.Add(img);
+                    dr.ValueIcon = img;
+                    value.Margin = new Thickness(0, 0, r.IconSize + 8, 0); // 给图标让位
+                }
+                RootPanel.Children.Add(grid);
 
                 if (r.Graph != null)
                 {
@@ -615,6 +662,11 @@ namespace ConkyWin
                         Margin = new Thickness(0, 3, 0, 0),
                         ClipToBounds = true
                     };
+                    dr.GraphArea = new System.Windows.Shapes.Polygon { Fill = Brushes.Transparent };
+                    dr.GraphLine = new System.Windows.Shapes.Polyline { StrokeThickness = 1 };
+                    canvas.Children.Add(dr.GraphArea);
+                    canvas.Children.Add(dr.GraphLine);
+                    dr.GraphH = r.GraphHeight;
                     RootPanel.Children.Add(canvas);
                     dr.GraphCanvas = canvas;
                 }
@@ -659,6 +711,12 @@ namespace ConkyWin
                     var brush = Brush(c.Color ?? "#EAF2FC");
                     dr.CellTexts[i].Foreground = brush;
                     dr.CellSubs[i].Foreground = brush;
+                    if (dr.CellIcons[i] != null && c.Icon != null)
+                    {
+                        dr.CellIcons[i].Width = dr.CellIcons[i].Height = c.IconSize;
+                        var src = LoadIcon(c.Icon);
+                        if (src != null && dr.CellIcons[i].Source != src) dr.CellIcons[i].Source = src;
+                    }
                 }
                 return;
             }
@@ -666,9 +724,15 @@ namespace ConkyWin
             dr.Value.Text = r.Text;
             dr.Value.Foreground = Brush(r.Color ?? "#EAF2FC");
             if (r.FontSize.HasValue) dr.Value.FontSize = r.FontSize.Value;
+            if (dr.ValueIcon != null && r.Icon != null)
+            {
+                dr.ValueIcon.Width = dr.ValueIcon.Height = r.IconSize;
+                var src = LoadIcon(r.Icon);
+                if (src != null && dr.ValueIcon.Source != src) dr.ValueIcon.Source = src;
+            }
             if (dr.GraphCanvas != null && r.Graph != null)
             {
-                DrawGraph(dr.GraphCanvas, r.GraphColor ?? r.Color ?? "#FFFFFF", r.Graph);
+                DrawGraph(dr, r.GraphColor ?? r.Color ?? "#FFFFFF", r.Graph);
             }
             else if (dr.Bar != null && r.Bar.HasValue)
             {
@@ -679,32 +743,59 @@ namespace ConkyWin
             }
         }
 
-        private static void DrawGraph(Canvas canvas, string colorHex, List<double> series)
+        /// <summary>
+        /// 曲线绘制：复用同一组 Polygon/Polyline 图元，每帧只更新点集。
+        /// 每帧 Clear+重建会产生可见的闪烁（控件经历"移除→添加→重排"两个渲染帧）。
+        /// </summary>
+        private void DrawGraph(DynRow dr, string colorHex, List<double> series)
         {
-            double w = canvas.ActualWidth, h = canvas.ActualHeight;
-            if (w <= 0 || h <= 0 || series == null || series.Count < 2) return;
-            canvas.Children.Clear();
-            var color = Brush(colorHex);
+            var canvas = dr.GraphCanvas;
+            double w = canvas.ActualWidth > 1 ? canvas.ActualWidth : Math.Max(10, _cfg.PanelWidth - 24);
+            double h = canvas.ActualHeight > 1 ? canvas.ActualHeight : dr.GraphH;
+            if (w <= 1 || h <= 1 || series == null || series.Count < 2) return;
+
+            if (dr.GraphColorStr != colorHex)
+            {
+                var color = Brush(colorHex);
+                dr.GraphLine.Stroke = color;
+                dr.GraphArea.Fill = new SolidColorBrush(Color.FromArgb(0x40, color.Color.R, color.Color.G, color.Color.B));
+                dr.GraphColorStr = colorHex;
+            }
+
+            var pts = dr.GraphLine.Points;
+            pts.Clear();
             int n = series.Count;
-            var pts = new PointCollection();
             for (int i = 0; i < n; i++)
             {
                 double x = w * i / (n - 1);
                 double v = Math.Max(0, Math.Min(100, series[i]));
                 pts.Add(new Point(x, h - 1 - v / 100.0 * (h - 2)));
             }
-            // 面积填充（同色 25% 透明）+ 实线描边
-            var fillPts = new PointCollection(pts);
+            // 面积 = 折线 + 底边两个点
+            var fillPts = dr.GraphArea.Points;
+            fillPts.Clear();
+            foreach (var p in pts) fillPts.Add(p);
             fillPts.Add(new Point(w, h));
             fillPts.Add(new Point(0, h));
-            var area = new System.Windows.Shapes.Polygon
+        }
+
+        /// <summary>加载图标 PNG（相对路径基于 exe 目录；OnLoad 立即读入避免文件锁）。</summary>
+        private static ImageSource LoadIcon(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            try
             {
-                Points = fillPts,
-                Fill = new SolidColorBrush(Color.FromArgb(0x40, color.Color.R, color.Color.G, color.Color.B))
-            };
-            canvas.Children.Add(area);
-            var line = new System.Windows.Shapes.Polyline { Points = pts, Stroke = color, StrokeThickness = 1 };
-            canvas.Children.Add(line);
+                string full = Path.IsPathRooted(path) ? path : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
+                if (!File.Exists(full)) return null;
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.UriSource = new Uri(full);
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch { return null; }
         }
 
         private void UpdateDynFonts(Config c)
@@ -728,6 +819,7 @@ namespace ConkyWin
         /// 把面板放到"壁纸之上、桌面图标之下"：
         /// 找到承载桌面图标（SHELLDLL_DefView）的顶层窗口（Progman 或 WorkerW），插到它正下方。
         /// 不用 HWND_BOTTOM 硬压底——它有概率把窗口压到壁纸层之下（实测偶发，表现为面板完全不可见）。
+        /// 位置同时做屏幕内钳制：内容高度变化（天气加载、行数变化）后不会超出工作区下边界。
         /// </summary>
         /// <summary>右对齐模式下根据面板宽度和 RightGap 计算 X，否则用配置 X。</summary>
         private int TargetX()
@@ -737,10 +829,22 @@ namespace ConkyWin
             return _cfg.Position.X;
         }
 
+        /// <summary>按配置 Y 定位，但保证面板完整落在工作区内（底部留 BottomGap 像素）。</summary>
+        private int TargetY()
+        {
+            int y = _cfg.Position.Y;
+            double waBottom = SystemParameters.WorkArea.Bottom;
+            double waTop = SystemParameters.WorkArea.Top;
+            double h = ActualHeight > 10 ? ActualHeight : 0;
+            if (h > 10 && y + h > waBottom - _cfg.Position.BottomGap)
+                y = (int)Math.Max(waTop, waBottom - _cfg.Position.BottomGap - h);
+            return y;
+        }
+
         private void PlaceWindow()
         {
             var hwnd = new WindowInteropHelper(this).Handle;
-            int x = TargetX(), y = _cfg.Position.Y;
+            int x = TargetX(), y = TargetY();
             IntPtr iconLayer = FindIconLayer();
             if (iconLayer != IntPtr.Zero && iconLayer != hwnd)
                 SetWindowPos(hwnd, iconLayer, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
@@ -909,6 +1013,8 @@ namespace ConkyWin
             public int Y { get; set; } = 360;
             /// <summary>>=0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap；-1 表示禁用，直接用 X。</summary>
             public int RightGap { get; set; } = -1;
+            /// <summary>面板底边与工作区底边的最小间距（内容超高时面板自动上移，保证不出屏）。</summary>
+            public int BottomGap { get; set; } = 8;
         }
 
         public class Item

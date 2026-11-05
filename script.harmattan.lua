@@ -92,20 +92,27 @@ end
 -- WMO 天气代码 → 中文描述
 local WMO = {
     [0]="晴",[1]="少云",[2]="多云",[3]="阴",[45]="雾",[48]="雾凇",
-    [51]="毛毛雨",[53]="毛毛雨",[55]="毛毛雨",[61]="小雨",[63]="中雨",[65]="大雨",
-    [66]="冻雨",[67]="冻雨",[71]="小雪",[73]="中雪",[75]="大雪",[77]="雪粒",
+    [51]="毛毛雨",[53]="毛毛雨",[55]="毛毛雨",[56]="冻雨",[57]="冻雨",
+    [61]="小雨",[63]="中雨",[65]="大雨",[66]="冻雨",[67]="冻雨",
+    [71]="小雪",[73]="中雪",[75]="大雪",[77]="雪粒",
     [80]="阵雨",[81]="阵雨",[82]="强阵雨",[85]="阵雪",[86]="阵雪",
     [95]="雷雨",[96]="雷雨冰雹",[99]="雷雨冰雹",
 }
 
--- WMO 天气代码 → 图标（文本符号，单色主题下也协调）
-local ICON = {
-    [0]="☀︎",[1]="🌤︎",[2]="⛅︎",[3]="☁︎",[45]="🌫︎",[48]="🌫︎",
-    [51]="🌧︎",[53]="🌧︎",[55]="🌧︎",[61]="🌧︎",[63]="🌧︎",[65]="🌧︎",
-    [66]="🌧︎",[67]="🌧︎",[71]="🌨︎",[73]="🌨︎",[75]="🌨︎",[77]="🌨︎",
-    [80]="🌧︎",[81]="🌧︎",[82]="🌧︎",[85]="🌨︎",[86]="🌨︎",
-    [95]="⛈︎",[96]="⛈︎",[99]="⛈︎",
+-- WMO 代码 → 本地 PNG 图标（assets/icons/*.png，经典 conky weather 图标集，weather.com 代码编号）
+local WICON = {
+    [0]=32,[1]=34,[2]=28,[3]=26,
+    [45]=20,[48]=20,
+    [51]=11,[53]=11,[55]=11,[56]=10,[57]=10,
+    [61]=11,[63]=12,[65]=40,[66]=10,[67]=10,
+    [71]=13,[73]=14,[75]=16,[77]=18,
+    [80]=11,[81]=11,[82]=40,[85]=46,[86]=46,
+    [95]=4,[96]=4,[99]=4,
 }
+local function wicon(code)
+    local n = WICON[math.floor(code or -1)]
+    return n and ("assets/icons/" .. n .. ".png") or nil
+end
 
 function conky_rows()
     local rows = {}
@@ -125,9 +132,9 @@ function conky_rows()
         -- 城市名 + 大字温度
         rows[#rows + 1] = { label = w.city, text = string.format("%.1f°", w.temp),
                             font_size = 26, color = C.accent }
-        -- 天气描述 + 图标
-        rows[#rows + 1] = { label = (WMO[math.floor(w.code)] or ""), text = (ICON[math.floor(w.code)] or ""),
-                            font_size = 15, color = C.text }
+        -- 天气描述 + 图标（PNG）
+        rows[#rows + 1] = { label = (WMO[math.floor(w.code)] or ""), icon = wicon(w.code),
+                            icon_size = 24, font_size = 15, color = C.text }
         -- 气压 / 湿度 / 风速
         rows[#rows + 1] = { label = "湿度", text = string.format("%.0f%%", w.humidity), color = C.text }
         rows[#rows + 1] = { label = "风速", text = string.format("%.2f km/h", w.wind), color = C.text }
@@ -141,7 +148,7 @@ function conky_rows()
             local d = w.daily[i]
             cells[i] = {
                 label = names[i],
-                text = ICON[math.floor(d.code)] or "",
+                icon = wicon(d.code),
                 sub = string.format("%.0f°/%.0f°", d.min, d.max),
                 color = C.text,
             }

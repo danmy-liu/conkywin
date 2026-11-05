@@ -56,8 +56,9 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 {
   "Position": {
     "X": 1680,                            // 面板位置（RightGap >= 0 时忽略 X）
-    "Y": 360,
-    "RightGap": -1                        // >= 0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap（0 = 紧贴右缘）
+    "Y": 360,                             // 面板顶部位置；内容超出屏幕时自动上移，保证面板完整在屏内
+    "RightGap": -1,                       // >= 0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap（0 = 紧贴右缘）
+    "BottomGap": 8                        // 面板底边与工作区底边的最小间距
   },
   "PanelWidth": 220,                     // 面板固定宽度（px），高度自适应内容
   "FontSize": 13,                        // 数值字号
@@ -131,7 +132,9 @@ function conky_rows()
 end
 ```
 
-每行字段：`label` / `text` 必填；`color`、`bar`（0-100 进度）、`bar_start` / `bar_end`（渐变两端）、`graph`（0-100 数值数组，历史曲线面积图）、`graph_height`（曲线高度）、`hr`（分隔横线）、`gap`（空白间隔 px，用于分区留白）、`font_size`（本行字号）、`cells`（多列布局，见下）可选。
+每行字段：`label` / `text` 必填；`color`、`bar`（0-100 进度）、`bar_start` / `bar_end`（渐变两端）、`graph`（0-100 数值数组，历史曲线面积图）、`graph_height`（曲线高度）、`hr`（分隔横线）、`gap`（空白间隔 px，用于分区留白）、`font_size`（本行字号）、`icon`（行尾图片路径，相对 exe 目录或绝对路径）、`icon_size`（默认 20）、`cells`（多列布局，见下）可选。`cells` 的每格同样支持 `icon` / `icon_size`（默认 22）。
+
+仓库自带 [`assets/icons/`](assets/icons) 一套白色单色天气图标（经典 conky weather 图标集，按 weather.com 代码 0-47 编号），脚本可直接引用：`icon = "assets/icons/32.png"`（晴）、`26.png`（多云）、`4.png`（雷雨）等。
 
 `cells` 渲染为一行等宽多列，每格 `{label, text, sub, color}` 三层（顶部小字 / 中间大字 / 底部小字），适合三天预报（星期 / 图标 / 温度）这类并排内容：
 

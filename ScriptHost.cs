@@ -67,6 +67,8 @@ namespace ConkyWin
         {
             public string Label = "";
             public string Text = "";
+            public string Icon;         // 非 null → 行尾渲染图标（路径，相对 exe 目录或绝对路径）
+            public double IconSize = 20;
             public string Color;        // null → 用默认色
             public double? Bar;         // null → 该行无进度条
             public string BarStart;
@@ -84,6 +86,8 @@ namespace ConkyWin
         {
             public string Label = "";   // 顶部小字
             public string Text = "";    // 中间大字（图标/数值）
+            public string Icon;         // 非 null → 用图片替代 Text（路径）
+            public double IconSize = 22;
             public string Sub = "";     // 底部小字
             public string Color;        // 整格颜色，null 用默认
         }
@@ -390,6 +394,10 @@ namespace ConkyWin
                     if (hr.Type == DataType.Boolean && hr.Boolean) r.Hr = true;
                     var fs = t.Get("font_size");
                     if (fs.Type == DataType.Number) r.FontSize = fs.Number;
+                    var icon = t.Get("icon");
+                    if (icon.Type == DataType.String) r.Icon = icon.String;
+                    var isz = t.Get("icon_size");
+                    if (isz.Type == DataType.Number) r.IconSize = Math.Max(8, isz.Number);
                     var gap = t.Get("gap");
                     if (gap.Type == DataType.Number) r.Gap = Math.Max(0, gap.Number);
                     var cells = t.Get("cells");
@@ -400,13 +408,17 @@ namespace ConkyWin
                         {
                             if (cv.Type != DataType.Table) continue;
                             var ct = cv.Table;
-                            r.Cells.Add(new RowCell
+                            var cell = new RowCell
                             {
                                 Label = GetStr(ct.Get("label")),
                                 Text = GetStr(ct.Get("text")),
                                 Sub = GetStr(ct.Get("sub")),
                                 Color = GetOptStr(ct.Get("color")),
-                            });
+                                Icon = GetOptStr(ct.Get("icon")),
+                            };
+                            var cisz = ct.Get("icon_size");
+                            if (cisz.Type == DataType.Number) cell.IconSize = Math.Max(8, cisz.Number);
+                            r.Cells.Add(cell);
                         }
                     }
                     rows.Add(r);
