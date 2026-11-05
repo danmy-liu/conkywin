@@ -28,3 +28,6 @@ Thumbs.db
 .workbuddy/
 autostart_check.txt
 交接文档.md
+
+## 发行包产物
+dist/

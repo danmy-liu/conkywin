@@ -31,15 +31,19 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 
 ## 运行要求
 
-- Windows 10 / 11
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-- （可选）NVIDIA 显卡 + `nvidia-smi` 在 PATH 中，用于 GPU 行
+- Windows 10 / 11（x64）
+- **无需安装 .NET**：发行版是自包含单文件，.NET 8 运行时已打包进 exe（约 69 MB），解压即用
+- （可选）NVIDIA 显卡 + `nvidia-smi`，用于 GPU 那一行；没有则自动跳过，其余功能不受影响
 
-## 使用
+> 从源码编译运行才需要 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
 
-1. 下载 Release 或自行编译，得到 `ConkyWin.exe`
-2. 双击运行，面板出现在屏幕右下（默认 1680,360），首次运行自动生成默认 `config.json`
-3. 编辑 `config.json` 调整位置 / 字号 / 配色，保存即生效
+## 快速开始
+
+1. 到 [发行版页面](https://gitee.com/danmyleo/conkywin/releases) 下载最新的 `ConkyWin-x.x.x-win-x64.zip`
+2. 解压到任意目录（建议固定位置，如 `D:\Tools\ConkyWin`——开机自启要用这个路径）
+3. 双击 `ConkyWin.exe`，面板出现在屏幕右侧
+4. 想改样式就编辑同目录的 `config.json` / `script.lua`，**保存即生效**，不用重启
+5. 不想要脚本版面板：删除 `script.lua`，立刻回到内置简洁面板（7 行，带进度条）
 
 ### 开机自启（可选）
 
@@ -190,7 +194,25 @@ local my_note  = cfg.MyNote               -- 任何键都能读
 dotnet build ConkyWin.csproj -c Release -o out
 ```
 
-产物在 `out\ConkyWin.exe`。
+产物在 `out\ConkyWin.exe`（依赖已安装的 .NET 8 运行时，体积仅 1 MB 左右）。
+
+## 打包发行版（自包含，别人无需装 .NET）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build-release.ps1
+```
+
+产物 `dist/ConkyWin-<版本>-win-x64.zip`（约 69 MB），内含：
+
+```
+ConkyWin.exe     自包含单文件（.NET 8 运行时已打包进去）
+config.json      推荐配置（268px 宽 Harmattan 布局）
+script.lua       Harmattan 主题脚本（删掉即回内置面板）
+assets\icons\    天气图标
+README.md / LICENSE
+```
+
+把 zip 上传到 Gitee 发行版附件即可（单个附件限制 100 MB，69 MB 在范围内）。
 
 ## 已知限制
 

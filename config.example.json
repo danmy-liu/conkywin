@@ -1,0 +1,49 @@
+{
+  "Position": {
+    "X": 1652,
+    "Y": 300,
+    "RightGap": 0,
+    "BottomGap": 8
+  },
+  "PanelWidth": 268,
+  "FontSize": 13,
+  "TimeFontSize": 15,
+  "Bold": true,
+  "LabelColor": "#A6BAD1",
+  "BarBackground": "#26FFFFFF",
+  "Cpu": {
+    "ValueColor": "#4DE3E0",
+    "BarStart": "#4DE3E0",
+    "BarEnd": "#2F9EFF"
+  },
+  "Mem": {
+    "ValueColor": "#7FB0FF",
+    "BarStart": "#6FA8FF",
+    "BarEnd": "#9B7BFF"
+  },
+  "Disk": {
+    "ValueColor": "#FFC85C",
+    "BarStart": "#FFC85C",
+    "BarEnd": "#FF8A5C"
+  },
+  "Net": {
+    "ValueColor": "#8FD8FF"
+  },
+  "Gpu": {
+    "ValueColor": "#B78CFF",
+    "BarStart": "#B78CFF",
+    "BarEnd": "#7A5CFF"
+  },
+  "Temp": {
+    "ValueColor": "#FF6B6B"
+  },
+  "Proc": {
+    "ValueColor": "#EAF2FC"
+  },
+  "Weather": {
+    "Lat": 999,
+    "Lon": 999
+  },
+  "GraphHeight": 30,
+  "TopProcesses": 5
+}
