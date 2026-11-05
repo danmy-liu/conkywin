@@ -26,7 +26,7 @@
         <!-- 标题行 -->
         <Grid Margin="0,0,0,6">
             <TextBlock Text="S Y S T E M" FontFamily="Consolas" FontSize="11" FontWeight="Bold" Foreground="#8FD8FF" VerticalAlignment="Center"/>
-            <TextBlock x:Name="TimeVal" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="15" FontWeight="Bold" Foreground="#EAF2FC" VerticalAlignment="Center"/>
+            <TextBlock x:Name="TimeVal" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="15" FontWeight="Bold" Foreground="#F2F7FF" VerticalAlignment="Center"/>
         </Grid>
 
         <!-- CPU -->
@@ -80,7 +80,7 @@
         <!-- 进程数 -->
         <Grid Margin="0,7,0,0">
             <TextBlock x:Name="LabelProc" Text="PROC" FontFamily="Microsoft YaHei UI" FontSize="11" Foreground="#7A90AC" VerticalAlignment="Center"/>
-            <TextBlock x:Name="ProcVal" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="13" FontWeight="Bold" Foreground="#EAF2FC" VerticalAlignment="Center"/>
+            <TextBlock x:Name="ProcVal" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="13" FontWeight="Bold" Foreground="#F2F7FF" VerticalAlignment="Center"/>
         </Grid>
     </StackPanel>
 </Window>

@@ -8,9 +8,10 @@ config.json
 debug.log
 weather.cache.json
 
-## 本地调试截图（assets/icons 的天气图标资源除外）
+## 本地调试截图（assets/icons 与 docs 的项目截图除外）
 *.png
 !assets/**/*.png
+!docs/**/*.png
 
 ## IDE / 编辑器
 .vs/

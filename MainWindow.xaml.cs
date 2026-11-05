@@ -33,6 +33,7 @@ namespace ConkyWin
         private ulong _totalMem;
         private long _lastRx, _lastTx;
         private DateTime _lastNetSample = DateTime.MinValue;
+        private DateTime _lastDiskSample = DateTime.MinValue;
         private int _gpuTick = 0;
         private Config _cfg = new Config();
         private readonly DispatcherTimer _timer;
@@ -332,6 +333,41 @@ namespace ConkyWin
             }
             catch (Exception ex) { Log("disk error: " + ex); }
 
+            // 所有固定磁盘（枚举驱动器有 IO 开销，5 秒刷新一次即可）
+            if ((DateTime.Now - _lastDiskSample).TotalSeconds >= 5)
+            {
+                _lastDiskSample = DateTime.Now;
+                try
+                {
+                    var list = new List<ScriptHost.DiskItem>();
+                    foreach (var d in DriveInfo.GetDrives())
+                    {
+                        try
+                        {
+                            if (!d.IsReady || d.DriveType != DriveType.Fixed) continue;
+                            double total = d.TotalSize / 1024.0 / 1024.0 / 1024.0;
+                            if (total <= 0) continue;
+                            double used = total - d.TotalFreeSpace / 1024.0 / 1024.0 / 1024.0;
+                            string name = d.Name.TrimEnd('\\');
+                            string label = "";
+                            try { label = d.VolumeLabel; } catch { }
+                            list.Add(new ScriptHost.DiskItem
+                            {
+                                Name = name,
+                                Label = label ?? "",
+                                TotalGb = total,
+                                UsedGb = used,
+                                Pct = Math.Min(100, Math.Max(0, used / total * 100))
+                            });
+                        }
+                        catch { }
+                    }
+                    s.Disks = list;
+                }
+                catch { }
+            }
+            else { /* 未到刷新周期：沿用上一次磁盘采样（s 即 _snap，保留原值） */ }
+
             // 网络（下行/上行 KB/s 差分）
             try
             {
@@ -557,7 +593,7 @@ namespace ConkyWin
                         Text = c.Text,
                         FontFamily = new FontFamily("Segoe UI Symbol, Segoe UI Emoji, Microsoft YaHei UI"),
                         FontSize = 20,
-                        Foreground = Brush(c.Color ?? "#EAF2FC"),
+                        Foreground = Brush(c.Color ?? "#F2F7FF"),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 2)
                     };
@@ -583,7 +619,7 @@ namespace ConkyWin
                         Text = c.Sub,
                         FontFamily = new FontFamily("Consolas"),
                         FontSize = 11,
-                        Foreground = Brush(c.Color ?? "#EAF2FC"),
+                        Foreground = Brush(c.Color ?? "#F2F7FF"),
                         HorizontalAlignment = HorizontalAlignment.Center
                     };
                     col.Children.Add(s);
@@ -628,7 +664,7 @@ namespace ConkyWin
                     FontFamily = new FontFamily("Consolas"),
                     FontSize = r.FontSize ?? _cfg.FontSize,
                     FontWeight = _cfg.Bold ? FontWeights.Bold : FontWeights.Normal,
-                    Foreground = Brush(r.Color ?? "#EAF2FC"),
+                    Foreground = Brush(r.Color ?? "#F2F7FF"),
                     VerticalAlignment = VerticalAlignment.Center,
                     HorizontalAlignment = HorizontalAlignment.Right
                 };
@@ -683,7 +719,7 @@ namespace ConkyWin
                     {
                         RadiusX = 2,
                         RadiusY = 2,
-                        Fill = Gradient(r.BarStart ?? "#EAF2FC", r.BarEnd ?? "#EAF2FC"),
+                        Fill = Gradient(r.BarStart ?? "#F2F7FF", r.BarEnd ?? "#F2F7FF"),
                         HorizontalAlignment = HorizontalAlignment.Left,
                         Width = 0
                     };
@@ -708,7 +744,7 @@ namespace ConkyWin
                     dr.CellLabels[i].Text = c.Label;
                     dr.CellTexts[i].Text = c.Text;
                     dr.CellSubs[i].Text = c.Sub;
-                    var brush = Brush(c.Color ?? "#EAF2FC");
+                    var brush = Brush(c.Color ?? "#F2F7FF");
                     dr.CellTexts[i].Foreground = brush;
                     dr.CellSubs[i].Foreground = brush;
                     if (dr.CellIcons[i] != null && c.Icon != null)
@@ -722,7 +758,7 @@ namespace ConkyWin
             }
             dr.Label.Text = r.Label;
             dr.Value.Text = r.Text;
-            dr.Value.Foreground = Brush(r.Color ?? "#EAF2FC");
+            dr.Value.Foreground = Brush(r.Color ?? "#F2F7FF");
             if (r.FontSize.HasValue) dr.Value.FontSize = r.FontSize.Value;
             if (dr.ValueIcon != null && r.Icon != null)
             {
@@ -994,7 +1030,7 @@ namespace ConkyWin
             public Item Net { get; set; } = new Item("#8FD8FF", "", "");
             public Item Gpu { get; set; } = new Item("#B78CFF", "#B78CFF", "#7A5CFF");
             public Item Temp { get; set; } = new Item("#FF6B6B", "", "");
-            public Item Proc { get; set; } = new Item("#EAF2FC", "", "");
+            public Item Proc { get; set; } = new Item("#F2F7FF", "", "");
             public Wx Weather { get; set; } = new Wx();
         }
 
@@ -1021,7 +1057,7 @@ namespace ConkyWin
         {
             public Item() { }
             public Item(string vc, string bs, string be) { ValueColor = vc; BarStart = bs; BarEnd = be; }
-            public string ValueColor { get; set; } = "#EAF2FC";
+            public string ValueColor { get; set; } = "#F2F7FF";
             public string BarStart { get; set; } = "";
             public string BarEnd { get; set; } = "";
         }

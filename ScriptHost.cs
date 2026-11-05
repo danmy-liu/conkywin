@@ -55,12 +55,21 @@ namespace ConkyWin
             public double MemPct, MemUsedGb, MemTotalGb;
             public bool DiskAvailable;
             public double DiskPct, DiskUsedGb, DiskTotalGb;
+            public List<DiskItem> Disks = new List<DiskItem>(); // 所有固定磁盘
             public double DiskIoKb;
             public double NetDownKb, NetUpKb;
             public double NetTotalDownGb, NetTotalUpGb; // 开机以来累计流量
             public double GpuUtil, GpuTemp, GpuMemUsedGb, GpuMemTotalGb;
             public bool GpuAvailable;
             public int Proc;
+        }
+
+        public class DiskItem
+        {
+            public string Name = "";    // "C:", "D:", ...
+            public string Label = "";   // 卷标（可能为空）
+            public double Pct;          // 已用百分比
+            public double UsedGb, TotalGb;
         }
 
         public class Row
@@ -206,6 +215,7 @@ namespace ConkyWin
             _api["disk_pct"] = (Func<double>)(() => _snap.DiskPct);
             _api["disk_used_gb"] = (Func<double>)(() => _snap.DiskUsedGb);
             _api["disk_total_gb"] = (Func<double>)(() => _snap.DiskTotalGb);
+            _api["disks"] = (Func<DynValue>)(() => GetDisks());
             _api["net_down_kb"] = (Func<double>)(() => _snap.NetDownKb);
             _api["net_up_kb"] = (Func<double>)(() => _snap.NetUpKb);
             _api["gpu_util"] = (Func<double>)(() => _snap.GpuUtil);
@@ -433,6 +443,24 @@ namespace ConkyWin
 
         private static string GetOptStr(DynValue v) => v.Type == DataType.String ? v.String
             : v.Type == DataType.Number ? v.Number.ToString(CultureInfo.InvariantCulture) : null;
+
+        /// <summary>所有固定磁盘：[{name="C:", label="系统", pct=62, used_gb=..., total_gb=...}, ...]</summary>
+        private DynValue GetDisks()
+        {
+            var t = new Table(_script);
+            int i = 0;
+            foreach (var d in _snap.Disks)
+            {
+                var e = new Table(_script);
+                e["name"] = d.Name;
+                e["label"] = d.Label;
+                e["pct"] = d.Pct;
+                e["used_gb"] = d.UsedGb;
+                e["total_gb"] = d.TotalGb;
+                t[++i] = DynValue.NewTable(e);
+            }
+            return DynValue.NewTable(t);
+        }
 
         private DynValue GetWeather()
         {

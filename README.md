@@ -168,6 +168,7 @@ local my_note  = cfg.MyNote               -- 任何键都能读
 | `conky.cpu()` | CPU 占用 0-100 |
 | `conky.mem_pct()` / `mem_used_gb()` / `mem_total_gb()` | 内存 |
 | `conky.disk_pct()` / `disk_used_gb()` / `disk_total_gb()` | C: 盘 |
+| `conky.disks()` | 所有固定磁盘数组 `{name="C:", label="系统", pct=62, used_gb, total_gb}` |
 | `conky.disk_io_kb()` | 全盘读写速率 KB/s |
 | `conky.net_down_kb()` / `conky.net_up_kb()` | 网速 KB/s |
 | `conky.net_total_down_gb()` / `net_total_up_gb()` | 开机以来累计收/发流量 GB |

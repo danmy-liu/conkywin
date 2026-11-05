@@ -7,17 +7,19 @@ local THEME = "color"
 local C
 if THEME == "mono" then
     C = {
-        text = "#FFFFFF", label = "#AAAAAA", hr = "#55FFFFFF",
+        text = "#FFFFFF", label = "#C8C8C8", hr = "#55FFFFFF",
         cpu = "#FFFFFF", mem = "#FFFFFF", disk = "#FFFFFF",
         net_down = "#FFFFFF", net_up = "#FFFFFF", gpu = "#FFFFFF",
-        accent = "#FFFFFF",
+        accent = "#FFFFFF", hot = "#FFFFFF", warn = "#FFFFFF",
     }
 else
     C = {
-        text = "#EAF2FC", label = "#7A90AC", hr = "#30FFFFFF",
+        text = "#F2F7FF", label = "#9FB6D0", hr = "#38FFFFFF",
         cpu = "#2F9EFF", mem = "#9B7BFF", disk = "#FFC85C",
         net_down = "#4DE3E0", net_up = "#8FD8FF", gpu = "#B78CFF",
         accent = "#4DE3E0",
+        hot = "#FFA94D",   -- 磁盘 >= 75%
+        warn = "#FF6B6B",  -- 磁盘 >= 90%
     }
 end
 
@@ -170,6 +172,15 @@ function conky_rows()
                         color = C.text, graph = mem_hist, graph_color = C.mem, graph_height = GRAPH_H }
     rows[#rows + 1] = { label = "Disk I/O:", text = fmt_rate(conky.disk_io_kb()) .. "/s",
                         color = C.text, graph = to_pct(io_raw, io_scale), graph_color = C.disk, graph_height = GRAPH_H }
+
+    -- ============ 所有固定磁盘的用量条（>=75% 琥珀、>=90% 红色告警） ============
+    for _, d in ipairs(conky.disks()) do
+        local col = d.pct >= 90 and C.warn or (d.pct >= 75 and C.hot or C.disk)
+        rows[#rows + 1] = { label = d.name,
+                            text = string.format("%.0f%%  %.0f/%.0fG", d.pct, d.used_gb, d.total_gb),
+                            color = col, font_size = 12,
+                            bar = d.pct, bar_start = col, bar_end = col }
+    end
 
     rows[#rows + 1] = { gap = 6 }
     rows[#rows + 1] = { hr = true, color = C.hr }
