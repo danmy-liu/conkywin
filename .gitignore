@@ -1,0 +1,24 @@
+## .NET 构建产物
+bin/
+obj/
+out/
+
+## 用户本机配置与日志（程序运行时自动生成）
+config.json
+debug.log
+
+## IDE / 编辑器
+.vs/
+.vscode/
+*.user
+*.suo
+
+## 其他
+*.pdb
+Thumbs.db
+.DS_Store
+
+## 本地工作文件（不属于开源内容）
+.workbuddy/
+autostart_check.txt
+交接文档.md
