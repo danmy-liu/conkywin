@@ -27,6 +27,7 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 - **配置热重载**：exe 同目录的 `config.json` 和 `script.lua` 保存后立即生效，无需重启（轮询修改时间实现，兼容"写临时文件再改名"的编辑器保存方式）；解析失败自动保留上一份有效配置
 - **无 GPU 也能跑**：NVIDIA GPU 检测失败时静默降级，其余各行不受影响
 - **Lua 脚本扩展**：可自定义每行文本/配色/进度条，甚至整面板由脚本生成（见下文）
+- **配置透传**：config.json 整表（含任意自定义键）通过 `conky.config()` 供脚本读取——改配置即改脚本参数，不用动代码
 
 ## 运行要求
 
@@ -89,7 +90,7 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 
 参照 Linux Conky 的思路，ConkyWin 支持 Lua 脚本扩展（基于 [MoonSharp](https://github.com/moonsharp-devs/moonsharp)，纯托管实现，无原生 DLL 依赖）：
 
-1. 把 [`script.example.lua`](script.example.lua)（最小示例）或 [`script.harmattan.lua`](script.harmattan.lua)（复刻 Linux Harmattan 主题：天气 + 历史曲线，顶部 `THEME = "color"/"mono"` 一键换肤）复制到 exe 同目录并改名为 `script.lua`
+1. 把 [`script.example.lua`](script.example.lua)（最小示例）或 [`script.harmattan.lua`](script.harmattan.lua)（复刻 Linux Harmattan 主题：天气大字/图标/三列预报 + 历史曲线 + 累计流量 + Top 进程列表；顶部 `THEME = "color"/"mono"` 一键换肤）复制到 exe 同目录并改名为 `script.lua`
 2. 保存即生效（热重载，无需重启）；删除 `script.lua` 即恢复内置面板
 
 脚本在**安全沙箱**中运行（无 io/os 等模块），出错只写 `debug.log` 并自动回退内置面板，不会导致挂件崩溃。
@@ -130,9 +131,32 @@ function conky_rows()
 end
 ```
 
-每行字段：`label` / `text` 必填；`color`（数值颜色）、`bar`（0-100 进度，nil 则无进度条）、`bar_start` / `bar_end`（渐变两端）、`graph`（数值数组 0-100，渲染历史曲线面积图）、`graph_height`（曲线高度，默认 26）、`hr`（true 时该行为分隔横线）、`font_size`（本行字号覆盖）可选。
+每行字段：`label` / `text` 必填；`color`、`bar`（0-100 进度）、`bar_start` / `bar_end`（渐变两端）、`graph`（0-100 数值数组，历史曲线面积图）、`graph_height`（曲线高度）、`hr`（分隔横线）、`gap`（空白间隔 px，用于分区留白）、`font_size`（本行字号）、`cells`（多列布局，见下）可选。
+
+`cells` 渲染为一行等宽多列，每格 `{label, text, sub, color}` 三层（顶部小字 / 中间大字 / 底部小字），适合三天预报（星期 / 图标 / 温度）这类并排内容：
+
+```lua
+rows[#rows + 1] = {
+    cells = {
+        { label = "今天", text = "☁︎", sub = "8°/18°" },
+        { label = "明天", text = "⛅︎", sub = "6°/16°" },
+        { label = "后天", text = "🌧︎", sub = "7°/11°" },
+    }
+}
+```
 
 速率类曲线建议**自适应满格量**（峰值放大、滞后收缩），否则流量几 K 时曲线是条直线——参考 `script.harmattan.lua` 里的 `autoscale()` 实现。
+
+### 自定义配置：conky.config() 透传
+
+config.json 会整体解析成 Lua 表，**包括任何你在里面自定义的键**。脚本可以直接把配置当参数用——改配置即改脚本行为，完全不用动代码：
+
+```lua
+local cfg = conky.config()
+local floor_kb = cfg.ScaleFloorKb or 16   -- 在 config.json 里加 "ScaleFloorKb": 32 即可覆盖
+local top_n    = cfg.TopProcesses or 5
+local my_note  = cfg.MyNote               -- 任何键都能读
+```
 
 ### 脚本可用 API
 
@@ -143,11 +167,14 @@ end
 | `conky.disk_pct()` / `disk_used_gb()` / `disk_total_gb()` | C: 盘 |
 | `conky.disk_io_kb()` | 全盘读写速率 KB/s |
 | `conky.net_down_kb()` / `conky.net_up_kb()` | 网速 KB/s |
+| `conky.net_total_down_gb()` / `net_total_up_gb()` | 开机以来累计收/发流量 GB |
+| `conky.top_mem(n)` / `top_cpu(n)` | 进程列表 `{name, mem_mb, cpu}`（每 3 秒采样） |
 | `conky.gpu_util()` / `gpu_temp()` / `gpu_mem_used_gb()` / `gpu_mem_total_gb()` | GPU |
 | `conky.gpu_available()` | GPU 是否可用 |
 | `conky.proc()` | 进程数 |
 | `conky.time(fmt)` | 当前时间（.NET 格式串，如 `"%H:%M:%S"`） |
-| `conky.weather()` | 天气表 `{city, temp, humidity, wind, daily[3]={code,min,max}}`，数据来自 [Open-Meteo](https://open-meteo.com)（免费无 key）；定位顺序：config 的 Lat/Lon > City > IP 自动定位；成功后有本地缓存，重启不用重等 |
+| `conky.config()` | config.json 整表（含自定义键） |
+| `conky.weather()` | 天气表 `{city, temp, humidity, wind, pressure, code, daily[3]={code,min,max}}`，数据来自 [Open-Meteo](https://open-meteo.com)（免费无 key）；定位顺序：config 的 Lat/Lon > City > IP 自动定位；成功后有本地缓存，重启不用重等 |
 | `conky.weather_error()` | 最近一次天气获取失败的原因（成功后为空串） |
 | `conky.font_size()` / `conky.time_font_size()` | config.json 中的字号 |
 

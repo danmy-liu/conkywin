@@ -63,7 +63,7 @@ namespace ConkyWin
             try
             {
                 // 加载配置（exe 同目录 config.json，不存在则自动生成默认）
-                _cfg = LoadConfig() ?? new Config();
+                _cfg = LoadConfigLive() ?? new Config();
                 Log("config 已加载 PanelWidth=" + _cfg.PanelWidth + " FontSize=" + _cfg.FontSize +
                     " RightGap=" + _cfg.Position.RightGap);
                 var hwnd = new WindowInteropHelper(this).Handle;
@@ -151,7 +151,7 @@ namespace ConkyWin
                 if (cs != _cfgStamp)
                 {
                     _cfgStamp = cs;
-                    var c = LoadConfig();
+                    var c = LoadConfigLive();
                     if (c != null)
                     {
                         _cfg = c;
@@ -355,6 +355,8 @@ namespace ConkyWin
                     }
                 }
                 _lastRx = rx; _lastTx = tx; _lastNetSample = DateTime.Now;
+                s.NetTotalDownGb = rx / 1024.0 / 1024.0 / 1024.0; // 开机以来累计
+                s.NetTotalUpGb = tx / 1024.0 / 1024.0 / 1024.0;
             }
             catch { }
 
@@ -442,18 +444,25 @@ namespace ConkyWin
         private class DynRow
         {
             public bool IsHr;
+            public bool IsGap;
+            public bool IsColumns;
             public Border Sep;
             public TextBlock Label, Value;
             public Border BarBg;
             public System.Windows.Shapes.Rectangle Bar;
             public Canvas GraphCanvas;
+            public TextBlock[] CellLabels, CellTexts, CellSubs;
         }
 
         private readonly List<DynRow> _dynRows = new List<DynRow>();
         private readonly List<string> _dynSigs = new List<string>();
 
-        private static string RowSig(ScriptHost.Row r) =>
-            r.Hr ? "hr" : r.Label + "|" + (r.Graph != null ? "g" + r.GraphHeight : "") + (r.Bar.HasValue ? "b" : "");
+        private static string RowSig(ScriptHost.Row r)
+        {
+            if (r.Gap > 0) return "gap";
+            if (r.Cells != null && r.Cells.Count > 0) return "cols" + r.Cells.Count;
+            return r.Hr ? "hr" : r.Label + "|" + (r.Graph != null ? "g" + r.GraphHeight : "") + (r.Bar.HasValue ? "b" : "");
+        }
 
         private void RenderScriptPanel()
         {
@@ -495,6 +504,70 @@ namespace ConkyWin
         {
             bool first = RootPanel.Children.Count == 0;
             var dr = new DynRow { IsHr = r.Hr };
+
+            if (r.Gap > 0) // 空白间隔行（分区留白）
+            {
+                RootPanel.Children.Add(new Border { Height = r.Gap, Background = Brushes.Transparent });
+                dr.IsGap = true;
+                _dynRows.Add(dr);
+                _dynSigs.Add(RowSig(r));
+                return;
+            }
+
+            if (r.Cells != null && r.Cells.Count > 0) // 多列布局（如三天预报：星期/图标/温度）
+            {
+                dr.IsColumns = true;
+                var grid = new Grid { Margin = new Thickness(0, first ? 0 : 7, 0, 0) };
+                for (int i = 0; i < r.Cells.Count; i++)
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                dr.CellLabels = new TextBlock[r.Cells.Count];
+                dr.CellTexts = new TextBlock[r.Cells.Count];
+                dr.CellSubs = new TextBlock[r.Cells.Count];
+                for (int i = 0; i < r.Cells.Count; i++)
+                {
+                    var c = r.Cells[i];
+                    var col = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+                    var l = new TextBlock
+                    {
+                        Text = c.Label,
+                        FontFamily = new FontFamily("Microsoft YaHei UI"),
+                        FontSize = 11,
+                        Foreground = Brush(_cfg.LabelColor),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 0, 0, 2)
+                    };
+                    var v = new TextBlock
+                    {
+                        Text = c.Text,
+                        FontFamily = new FontFamily("Segoe UI Symbol, Segoe UI Emoji, Microsoft YaHei UI"),
+                        FontSize = 20,
+                        Foreground = Brush(c.Color ?? "#EAF2FC"),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 0, 0, 2)
+                    };
+                    var s = new TextBlock
+                    {
+                        Text = c.Sub,
+                        FontFamily = new FontFamily("Consolas"),
+                        FontSize = 11,
+                        Foreground = Brush(c.Color ?? "#EAF2FC"),
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    };
+                    col.Children.Add(l);
+                    col.Children.Add(v);
+                    col.Children.Add(s);
+                    Grid.SetColumn(col, i);
+                    grid.Children.Add(col);
+                    dr.CellLabels[i] = l;
+                    dr.CellTexts[i] = v;
+                    dr.CellSubs[i] = s;
+                }
+                RootPanel.Children.Add(grid);
+                _dynRows.Add(dr);
+                _dynSigs.Add(RowSig(r));
+                return;
+            }
+
             if (r.Hr)
             {
                 var sep = new Border
@@ -574,7 +647,21 @@ namespace ConkyWin
 
         private void RefreshDynRow(DynRow dr, ScriptHost.Row r)
         {
-            if (dr.IsHr) return; // 分隔线无动态内容
+            if (dr.IsHr || dr.IsGap) return; // 分隔线/间隔无动态内容
+            if (dr.IsColumns && r.Cells != null)
+            {
+                for (int i = 0; i < Math.Min(dr.CellTexts.Length, r.Cells.Count); i++)
+                {
+                    var c = r.Cells[i];
+                    dr.CellLabels[i].Text = c.Label;
+                    dr.CellTexts[i].Text = c.Text;
+                    dr.CellSubs[i].Text = c.Sub;
+                    var brush = Brush(c.Color ?? "#EAF2FC");
+                    dr.CellTexts[i].Foreground = brush;
+                    dr.CellSubs[i].Foreground = brush;
+                }
+                return;
+            }
             dr.Label.Text = r.Label;
             dr.Value.Text = r.Text;
             dr.Value.Foreground = Brush(r.Color ?? "#EAF2FC");
@@ -624,7 +711,12 @@ namespace ConkyWin
         {
             foreach (var dr in _dynRows)
             {
-                if (dr.IsHr) continue;
+                if (dr.IsHr || dr.IsGap) continue;
+                if (dr.IsColumns)
+                {
+                    foreach (var l in dr.CellLabels) if (l != null) l.Foreground = Brush(c.LabelColor);
+                    continue;
+                }
                 dr.Label.Foreground = Brush(c.LabelColor);
                 dr.Value.FontSize = c.FontSize;
                 dr.Value.FontWeight = c.Bold ? FontWeights.Bold : FontWeights.Normal;
@@ -682,12 +774,28 @@ namespace ConkyWin
         private static Config LoadConfig()
         {
             string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            return LoadConfigFile(path, out _);
+        }
+
+        /// <summary>加载配置并把原文带给脚本宿主（conky.config() 透传，含用户自定义键）。</summary>
+        private Config LoadConfigLive()
+        {
+            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            var c = LoadConfigFile(path, out string raw);
+            if (c != null) _scriptHost.ConfigJson = raw;
+            return c;
+        }
+
+        private static Config LoadConfigFile(string path, out string rawText)
+        {
+            rawText = "{}";
             try
             {
                 if (File.Exists(path))
                 {
                     var text = File.ReadAllText(path);
                     if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1); // 去掉记事本等编辑器加的 BOM
+                    rawText = text;
                     var c = JsonSerializer.Deserialize<Config>(text);
                     return c; // 解析失败返回 null，调用方保留现有配置
                 }

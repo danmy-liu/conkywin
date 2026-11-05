@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -55,6 +57,7 @@ namespace ConkyWin
             public double DiskPct, DiskUsedGb, DiskTotalGb;
             public double DiskIoKb;
             public double NetDownKb, NetUpKb;
+            public double NetTotalDownGb, NetTotalUpGb; // 开机以来累计流量
             public double GpuUtil, GpuTemp, GpuMemUsedGb, GpuMemTotalGb;
             public bool GpuAvailable;
             public int Proc;
@@ -73,6 +76,16 @@ namespace ConkyWin
             public string GraphColor;   // null → 用 Color
             public bool Hr;             // true → 该行渲染为分隔横线
             public double? FontSize;    // null → 用全局字号
+            public double Gap;          // > 0 → 该行为空白间隔（px）
+            public List<RowCell> Cells; // 非 null → 该行为多列布局（如三天预报）
+        }
+
+        public class RowCell
+        {
+            public string Label = "";   // 顶部小字
+            public string Text = "";    // 中间大字（图标/数值）
+            public string Sub = "";     // 底部小字
+            public string Color;        // 整格颜色，null 用默认
         }
 
         private Script _script;
@@ -91,6 +104,17 @@ namespace ConkyWin
         private string _lastError = "";
         private Snapshot _snap = new Snapshot();
         public int FontSize, TimeFontSize;
+
+        /// <summary>config.json 原文，conky.config() 会解析成 Lua 表透传（含用户自定义键）。</summary>
+        public string ConfigJson = "{}";
+        private DynValue _cfgTable;
+        private string _cfgTableSrc;
+
+        // ---------- 进程 Top 列表（每 3 秒采样，供 conky.top_mem/top_cpu） ----------
+        private class ProcInfo { public string Name; public double MemMb; public double Cpu; }
+        private List<ProcInfo> _procs = new List<ProcInfo>();
+        private DateTime _lastProcSample = DateTime.MinValue;
+        private readonly Dictionary<int, double> _procCpuTicks = new Dictionary<int, double>();
 
         // ---------- 天气（Open-Meteo 免费 API，无 key；失败退避重试 + 本地缓存） ----------
         // 定位优先级：config 的 Weather.Lat/Lon > Weather.City（地理编码）> IP 定位（三源回退）
@@ -117,6 +141,8 @@ namespace ConkyWin
             public double Temp { get; set; }
             public double Humidity { get; set; }
             public double Wind { get; set; }
+            public double Pressure { get; set; }   // hPa 气压
+            public double Code { get; set; }       // WMO 当前天气代码
             public string City { get; set; } = "";
             public List<double[]> Daily { get; set; } = new List<double[]>();
             public double Lat { get; set; }
@@ -192,9 +218,102 @@ namespace ConkyWin
             _api["font_size"] = (Func<double>)(() => FontSize);
             _api["time_font_size"] = (Func<double>)(() => TimeFontSize);
             _api["disk_io_kb"] = (Func<double>)(() => _snap.DiskIoKb);
+            _api["net_total_down_gb"] = (Func<double>)(() => _snap.NetTotalDownGb);
+            _api["net_total_up_gb"] = (Func<double>)(() => _snap.NetTotalUpGb);
+            _api["top_mem"] = (Func<double, DynValue>)(n => TopTable(false, n));
+            _api["top_cpu"] = (Func<double, DynValue>)(n => TopTable(true, n));
+            _api["config"] = (Func<DynValue>)(() => ConfigTable());
             _api["weather"] = (Func<DynValue>)(() => GetWeather());
             _api["weather_error"] = (Func<string>)(() => _wxError ?? "");
             _script.Globals["conky"] = _api;
+        }
+
+        /// <summary>conky.config()：config.json 解析成 Lua 表（含任意自定义键），改配置即改脚本参数。</summary>
+        private DynValue ConfigTable()
+        {
+            if (_cfgTable == null || _cfgTableSrc != ConfigJson)
+            {
+                _cfgTableSrc = ConfigJson;
+                try
+                {
+                    using var doc = JsonDocument.Parse(ConfigJson);
+                    _cfgTable = JsonToLua(doc.RootElement);
+                }
+                catch { _cfgTable = DynValue.NewTable(new Table(_script)); }
+            }
+            return _cfgTable;
+        }
+
+        private DynValue JsonToLua(JsonElement el)
+        {
+            switch (el.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    var t = new Table(_script);
+                    foreach (var p in el.EnumerateObject()) t[p.Name] = JsonToLua(p.Value);
+                    return DynValue.NewTable(t);
+                case JsonValueKind.Array:
+                    var a = new Table(_script);
+                    int i = 0;
+                    foreach (var item in el.EnumerateArray()) a[++i] = JsonToLua(item);
+                    return DynValue.NewTable(a);
+                case JsonValueKind.String: return DynValue.NewString(el.GetString());
+                case JsonValueKind.Number: return DynValue.NewNumber(el.GetDouble());
+                case JsonValueKind.True:
+                case JsonValueKind.False: return DynValue.NewBoolean(el.GetBoolean());
+                default: return DynValue.Nil;
+            }
+        }
+
+        /// <summary>conky.top_mem(n) / top_cpu(n)：返回 {name, mem_mb, cpu} 列表。</summary>
+        private DynValue TopTable(bool byCpu, double n)
+        {
+            SampleProcesses();
+            var src = byCpu
+                ? _procs.OrderByDescending(p => p.Cpu).Take(Math.Max(1, (int)n))
+                : _procs.OrderByDescending(p => p.MemMb).Take(Math.Max(1, (int)n));
+            var t = new Table(_script);
+            int i = 0;
+            foreach (var p in src)
+            {
+                var e = new Table(_script);
+                e["name"] = p.Name;
+                e["mem_mb"] = p.MemMb;
+                e["cpu"] = p.Cpu;
+                t[++i] = DynValue.NewTable(e);
+            }
+            return DynValue.NewTable(t);
+        }
+
+        private void SampleProcesses()
+        {
+            var now = DateTime.Now;
+            if (_procs.Count > 0 && (now - _lastProcSample).TotalSeconds < 3) return; // 3 秒内用缓存
+            double wall = _lastProcSample == DateTime.MinValue ? 0 : (now - _lastProcSample).TotalSeconds;
+            _lastProcSample = now;
+            var list = new List<ProcInfo>();
+            var newTicks = new Dictionary<int, double>();
+            try
+            {
+                foreach (var p in Process.GetProcesses())
+                {
+                    try
+                    {
+                        var pi = new ProcInfo { Name = p.ProcessName, MemMb = p.WorkingSet64 / 1024.0 / 1024.0 };
+                        double total = p.TotalProcessorTime.TotalSeconds;
+                        newTicks[p.Id] = total;
+                        if (wall > 0 && _procCpuTicks.TryGetValue(p.Id, out double prev))
+                            pi.Cpu = Math.Min(100, Math.Max(0, (total - prev) / wall * 100)); // 单核归一
+                        list.Add(pi);
+                    }
+                    catch { } // 进程可能刚好退出
+                    finally { try { p.Dispose(); } catch { } }
+                }
+            }
+            catch { }
+            _procCpuTicks.Clear();
+            foreach (var kv in newTicks) _procCpuTicks[kv.Key] = kv.Value;
+            if (list.Count > 0) _procs = list;
         }
 
         // ---------- 增强模式钩子 ----------
@@ -271,6 +390,25 @@ namespace ConkyWin
                     if (hr.Type == DataType.Boolean && hr.Boolean) r.Hr = true;
                     var fs = t.Get("font_size");
                     if (fs.Type == DataType.Number) r.FontSize = fs.Number;
+                    var gap = t.Get("gap");
+                    if (gap.Type == DataType.Number) r.Gap = Math.Max(0, gap.Number);
+                    var cells = t.Get("cells");
+                    if (cells.Type == DataType.Table)
+                    {
+                        r.Cells = new List<RowCell>();
+                        foreach (var cv in cells.Table.Values)
+                        {
+                            if (cv.Type != DataType.Table) continue;
+                            var ct = cv.Table;
+                            r.Cells.Add(new RowCell
+                            {
+                                Label = GetStr(ct.Get("label")),
+                                Text = GetStr(ct.Get("text")),
+                                Sub = GetStr(ct.Get("sub")),
+                                Color = GetOptStr(ct.Get("color")),
+                            });
+                        }
+                    }
                     rows.Add(r);
                 }
                 return rows;
@@ -305,6 +443,8 @@ namespace ConkyWin
                 t["temp"] = _wx.Temp;
                 t["humidity"] = _wx.Humidity;
                 t["wind"] = _wx.Wind;
+                t["pressure"] = _wx.Pressure;
+                t["code"] = _wx.Code;
                 t["city"] = _wx.City;
                 var daily = new Table(_script);
                 for (int i = 0; i < _wx.Daily.Count; i++)
@@ -348,7 +488,7 @@ namespace ConkyWin
                 string latS = lat.ToString("0.####", CultureInfo.InvariantCulture);
                 string lonS = lon.ToString("0.####", CultureInfo.InvariantCulture);
                 string url = "https://api.open-meteo.com/v1/forecast?latitude=" + latS + "&longitude=" + lonS +
-                             "&current=temperature_2m,relative_humidity_2m,wind_speed_10m" +
+                             "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,weather_code" +
                              "&daily=weathercode,temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto";
                 using var doc = JsonDocument.Parse(await Http.GetStringAsync(url).ConfigureAwait(false));
                 var cur = doc.RootElement.GetProperty("current");
@@ -358,6 +498,8 @@ namespace ConkyWin
                     Temp = cur.GetProperty("temperature_2m").GetDouble(),
                     Humidity = cur.GetProperty("relative_humidity_2m").GetDouble(),
                     Wind = cur.GetProperty("wind_speed_10m").GetDouble(),
+                    Pressure = cur.TryGetProperty("surface_pressure", out var pr) ? pr.GetDouble() : 0,
+                    Code = cur.TryGetProperty("weather_code", out var wc) ? wc.GetDouble() : 0,
                     Lat = lat,
                     Lon = lon,
                     Updated = DateTime.Now,
