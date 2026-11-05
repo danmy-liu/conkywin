@@ -29,6 +29,21 @@ local SCALE_FLOOR_KB = cfg.ScaleFloorKb or 16   -- 速率曲线最低满格量�
 local GRAPH_H        = cfg.GraphHeight or 30    -- 曲线高度
 local TOP_N          = cfg.TopProcesses or 5    -- 进程列表条数
 
+-- color 主题下，config.json 的颜色配置优先：改 config 的 Cpu.ValueColor 等即改脚本配色
+if THEME == "color" then
+    local function pick(v, fallback)
+        return (type(v) == "string" and #v > 0) and v or fallback
+    end
+    C.cpu      = pick(cfg.Cpu and cfg.Cpu.ValueColor, C.cpu)
+    C.mem      = pick(cfg.Mem and cfg.Mem.ValueColor, C.mem)
+    C.disk     = pick(cfg.Disk and cfg.Disk.ValueColor, C.disk)
+    C.net_down = pick(cfg.Net and cfg.Net.ValueColor, C.net_down)
+    C.gpu      = pick(cfg.Gpu and cfg.Gpu.ValueColor, C.gpu)
+    C.label    = pick(cfg.LabelColor, C.label)
+    C.text     = pick(cfg.TextColor, C.text)
+    C.accent   = pick(cfg.AccentColor, C.accent)
+end
+
 -- ============ 速率曲线自适应满格量 ============
 -- 固定满格量（比如 2MB/s）在平时几 K 的流量下会画成一条直线，看不出起伏。
 -- 峰值走高立刻放大满格量，峰值回落到一半以下再缓慢收缩：

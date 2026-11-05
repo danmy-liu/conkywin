@@ -161,7 +161,11 @@ namespace ConkyWin
                         _cfg = c;
                         ApplyConfig(c);
                         PlaceWindow();
-                        Log("config.json 已重新加载（宽度/位置/字号/配色已生效）");
+                        // 脚本在加载时缓存了 conky.config() 的值（GraphHeight/TopProcesses/配色等），
+                        // config 变化后必须重新执行脚本才能生效（曲线历史会重置，属正常现象）
+                        if (_scriptHost.Loaded) ReloadScript();
+                        Log("config.json 已重新加载（宽度/位置/字号/配色已生效" +
+                            (_scriptHost.Loaded ? "，脚本已按新配置重新执行）" : "）"));
                     }
                     else Log("config.json 解析失败，保留原配置");
                 }
