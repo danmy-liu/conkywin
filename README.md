@@ -39,7 +39,9 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 
 ## 快速开始
 
-1. 到 [发行版页面](https://gitee.com/danmyleo/conkywin/releases) 下载最新的 `ConkyWin-x.x.x-win-x64.zip`
+1. 下载最新的 `ConkyWin-x.x.x-win-x64.zip`（国内推荐 Gitee，速度更快）：
+   - Gitee：[gitee.com/danmyleo/conkywin/releases](https://gitee.com/danmyleo/conkywin/releases)
+   - GitHub：[github.com/danmyleo/conkywin/releases](https://github.com/danmyleo/conkywin/releases)
 2. 解压到任意目录（建议固定位置，如 `D:\Tools\ConkyWin`——开机自启要用这个路径）
 3. 双击 `ConkyWin.exe`，面板出现在屏幕右侧
 4. 想改样式就编辑同目录的 `config.json` / `script.lua`，**保存即生效**，不用重启
@@ -212,7 +214,21 @@ assets\icons\    天气图标
 README.md / LICENSE
 ```
 
-把 zip 上传到 Gitee 发行版附件即可（单个附件限制 100 MB，69 MB 在范围内）。
+把 zip 作为附件上传到发行版即可：Gitee 单个附件上限 100 MB，GitHub 上限 2 GB，69 MB 都在范围内。
+
+### 发版流程
+
+推一个 `v*` 标签，GitHub Actions 会自动在 Windows 上编译、打包并创建 Release（附件自动上传），工作流见 `.github/workflows/release.yml`：
+
+```powershell
+# 1. 改 ConkyWin.csproj 里的 <Version>
+# 2. 提交并打标签
+git commit -am "发布 v1.0.1"
+git tag v1.0.1
+git push --follow-tags        # 有 github 远程时同步推送
+```
+
+Gitee 侧不支持这种自动构建，需要本地跑一次 `build-release.ps1` 再手动上传附件。
 
 ## 已知限制
 
