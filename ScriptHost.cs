@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
 using MoonSharp.Interpreter;
 
 namespace ConkyWin
@@ -50,6 +53,7 @@ namespace ConkyWin
             public double MemPct, MemUsedGb, MemTotalGb;
             public bool DiskAvailable;
             public double DiskPct, DiskUsedGb, DiskTotalGb;
+            public double DiskIoKb;
             public double NetDownKb, NetUpKb;
             public double GpuUtil, GpuTemp, GpuMemUsedGb, GpuMemTotalGb;
             public bool GpuAvailable;
@@ -64,6 +68,11 @@ namespace ConkyWin
             public double? Bar;         // null → 该行无进度条
             public string BarStart;
             public string BarEnd;
+            public List<double> Graph;  // null → 无曲线图；否则为 0-100 的历史序列
+            public double GraphHeight = 26;
+            public string GraphColor;   // null → 用 Color
+            public bool Hr;             // true → 该行渲染为分隔横线
+            public double? FontSize;    // null → 用全局字号
         }
 
         private Script _script;
@@ -82,6 +91,47 @@ namespace ConkyWin
         private string _lastError = "";
         private Snapshot _snap = new Snapshot();
         public int FontSize, TimeFontSize;
+
+        // ---------- 天气（Open-Meteo 免费 API，无 key；失败退避重试 + 本地缓存） ----------
+        // 定位优先级：config 的 Weather.Lat/Lon > Weather.City（地理编码）> IP 定位（三源回退）
+        public double WeatherLat = 999, WeatherLon = 999;
+        public string WeatherCity = "";
+        private WeatherData _wx;
+        private readonly object _wxLock = new object();
+        private DateTime _wxNextAttempt = DateTime.MinValue;  // 下一次允许抓取的时间
+        private int _wxFail;
+        private bool _wxCacheLoaded;
+        private string _wxError = "";
+
+        private static readonly HttpClient Http = CreateHttp();
+
+        private static HttpClient CreateHttp()
+        {
+            var h = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            try { h.DefaultRequestHeaders.UserAgent.ParseAdd("ConkyWin/1.0"); } catch { }
+            return h;
+        }
+
+        public class WeatherData
+        {
+            public double Temp { get; set; }
+            public double Humidity { get; set; }
+            public double Wind { get; set; }
+            public string City { get; set; } = "";
+            public List<double[]> Daily { get; set; } = new List<double[]>();
+            public double Lat { get; set; }
+            public double Lon { get; set; }
+            public DateTime Updated { get; set; }
+        }
+
+        /// <summary>配置里的城市/坐标变了：清空当前数据并立刻重抓。</summary>
+        public void InvalidateWeather()
+        {
+            lock (_wxLock) _wx = null;
+            _wxFail = 0;
+            _wxNextAttempt = DateTime.MinValue;
+            _wxCacheLoaded = true; // 坐标已变，不再恢复旧缓存
+        }
 
         /// <summary>加载 script.lua；不存在或解析失败返回 false（Loaded=false）。</summary>
         public bool Load(string path, Snapshot snap)
@@ -141,6 +191,9 @@ namespace ConkyWin
             });
             _api["font_size"] = (Func<double>)(() => FontSize);
             _api["time_font_size"] = (Func<double>)(() => TimeFontSize);
+            _api["disk_io_kb"] = (Func<double>)(() => _snap.DiskIoKb);
+            _api["weather"] = (Func<DynValue>)(() => GetWeather());
+            _api["weather_error"] = (Func<string>)(() => _wxError ?? "");
             _script.Globals["conky"] = _api;
         }
 
@@ -200,10 +253,24 @@ namespace ConkyWin
                         Color = GetOptStr(t.Get("color")),
                         BarStart = GetOptStr(t.Get("bar_start")),
                         BarEnd = GetOptStr(t.Get("bar_end")),
+                        GraphColor = GetOptStr(t.Get("graph_color")),
                     };
                     var bar = t.Get("bar");
                     if (bar.Type == DataType.Number)
                         r.Bar = Math.Max(0, Math.Min(100, bar.Number));
+                    var g = t.Get("graph");
+                    if (g.Type == DataType.Table)
+                    {
+                        r.Graph = new List<double>();
+                        foreach (var gv in g.Table.Values)
+                            if (gv.Type == DataType.Number) r.Graph.Add(gv.Number);
+                    }
+                    var gh = t.Get("graph_height");
+                    if (gh.Type == DataType.Number) r.GraphHeight = gh.Number;
+                    var hr = t.Get("hr");
+                    if (hr.Type == DataType.Boolean && hr.Boolean) r.Hr = true;
+                    var fs = t.Get("font_size");
+                    if (fs.Type == DataType.Number) r.FontSize = fs.Number;
                     rows.Add(r);
                 }
                 return rows;
@@ -216,6 +283,177 @@ namespace ConkyWin
 
         private static string GetOptStr(DynValue v) => v.Type == DataType.String ? v.String
             : v.Type == DataType.Number ? v.Number.ToString(CultureInfo.InvariantCulture) : null;
+
+        private DynValue GetWeather()
+        {
+            if (!_wxCacheLoaded)
+            {
+                _wxCacheLoaded = true;
+                LoadWeatherCache(); // 上次成功的数据先顶上，重启后不再"加载中"
+            }
+            if (DateTime.Now >= _wxNextAttempt)
+            {
+                _wxNextAttempt = DateTime.Now.AddSeconds(30); // 占位，避免抓取期间每秒重复起线程
+                double lat = WeatherLat, lon = WeatherLon;
+                string city = WeatherCity ?? "";
+                Task.Run(() => FetchWeatherAsync(lat, lon, city));
+            }
+            lock (_wxLock)
+            {
+                if (_wx == null) return DynValue.Nil;
+                var t = new Table(_script);
+                t["temp"] = _wx.Temp;
+                t["humidity"] = _wx.Humidity;
+                t["wind"] = _wx.Wind;
+                t["city"] = _wx.City;
+                var daily = new Table(_script);
+                for (int i = 0; i < _wx.Daily.Count; i++)
+                {
+                    var d = new Table(_script);
+                    d["code"] = _wx.Daily[i][0];
+                    d["min"] = _wx.Daily[i][1];
+                    d["max"] = _wx.Daily[i][2];
+                    daily[i + 1] = DynValue.NewTable(d);
+                }
+                t["daily"] = daily;
+                return DynValue.NewTable(t);
+            }
+        }
+
+        private async Task FetchWeatherAsync(double lat, double lon, string cityCfg)
+        {
+            try
+            {
+                string city = (cityCfg ?? "").Trim();
+                if (lat > 900 || lon > 900)
+                {
+                    if (city.Length > 0)
+                    {
+                        var g = await GeocodeAsync(city).ConfigureAwait(false);
+                        if (g.HasValue) { lat = g.Value.Lat; lon = g.Value.Lon; }
+                    }
+                    if (lat > 900 || lon > 900)
+                    {
+                        var ip = await LocateByIpAsync().ConfigureAwait(false);
+                        if (ip.HasValue)
+                        {
+                            lat = ip.Value.Lat; lon = ip.Value.Lon;
+                            if (city.Length == 0) city = ip.Value.City;
+                        }
+                    }
+                }
+                if (lat > 900 || lon > 900)
+                    throw new Exception("无法定位，请在 config.json 的 Weather.City 里填城市名（如 \"宝鸡\"）");
+
+                string latS = lat.ToString("0.####", CultureInfo.InvariantCulture);
+                string lonS = lon.ToString("0.####", CultureInfo.InvariantCulture);
+                string url = "https://api.open-meteo.com/v1/forecast?latitude=" + latS + "&longitude=" + lonS +
+                             "&current=temperature_2m,relative_humidity_2m,wind_speed_10m" +
+                             "&daily=weathercode,temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto";
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync(url).ConfigureAwait(false));
+                var cur = doc.RootElement.GetProperty("current");
+                var wx = new WeatherData
+                {
+                    City = city,
+                    Temp = cur.GetProperty("temperature_2m").GetDouble(),
+                    Humidity = cur.GetProperty("relative_humidity_2m").GetDouble(),
+                    Wind = cur.GetProperty("wind_speed_10m").GetDouble(),
+                    Lat = lat,
+                    Lon = lon,
+                    Updated = DateTime.Now,
+                };
+                var daily = doc.RootElement.GetProperty("daily");
+                var codes = daily.GetProperty("weathercode");
+                var mins = daily.GetProperty("temperature_2m_min");
+                var maxs = daily.GetProperty("temperature_2m_max");
+                for (int i = 0; i < codes.GetArrayLength(); i++)
+                    wx.Daily.Add(new[] { codes[i].GetDouble(), mins[i].GetDouble(), maxs[i].GetDouble() });
+
+                lock (_wxLock) _wx = wx;
+                _wxFail = 0;
+                _wxError = "";
+                _wxNextAttempt = DateTime.Now.AddMinutes(10);
+                SaveWeatherCache(wx);
+                LogError("weather ok: " + city + " " + wx.Temp + "°C");
+            }
+            catch (Exception ex)
+            {
+                _wxFail++;
+                int wait = Math.Min(300, 20 << Math.Min(_wxFail - 1, 4)); // 20s→40s→80s→160s→300s 封顶
+                _wxNextAttempt = DateTime.Now.AddSeconds(wait);
+                _wxError = ex.Message;
+                LogError("weather 获取失败（" + wait + "s 后重试）: " + ex.Message);
+            }
+        }
+
+        /// <summary>城市名 → 经纬度（Open-Meteo 地理编码，支持中文名）。</summary>
+        private static async Task<(double Lat, double Lon)?> GeocodeAsync(string city)
+        {
+            try
+            {
+                string url = "https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&format=json&name=" +
+                             Uri.EscapeDataString(city);
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync(url).ConfigureAwait(false));
+                if (!doc.RootElement.TryGetProperty("results", out var arr) || arr.GetArrayLength() == 0) return null;
+                var r = arr[0];
+                return (r.GetProperty("latitude").GetDouble(), r.GetProperty("longitude").GetDouble());
+            }
+            catch { return null; }
+        }
+
+        /// <summary>IP 定位，三个源依次尝试（ip-api 在国内不稳，放最后）。</summary>
+        private static async Task<(double Lat, double Lon, string City)?> LocateByIpAsync()
+        {
+            try // 1) ipwho.is（https）
+            {
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://ipwho.is/").ConfigureAwait(false));
+                var r = doc.RootElement;
+                if (r.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True &&
+                    r.TryGetProperty("latitude", out var la) && la.ValueKind == JsonValueKind.Number)
+                    return (la.GetDouble(), r.GetProperty("longitude").GetDouble(), Str(r, "city"));
+            }
+            catch { }
+            try // 2) freeipapi.com（https）
+            {
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://freeipapi.com/api/json").ConfigureAwait(false));
+                var r = doc.RootElement;
+                if (r.TryGetProperty("latitude", out var la) && la.ValueKind == JsonValueKind.Number)
+                    return (la.GetDouble(), r.GetProperty("longitude").GetDouble(), Str(r, "cityName"));
+            }
+            catch { }
+            try // 3) ip-api.com
+            {
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync("http://ip-api.com/json/?fields=status,lat,lon,city").ConfigureAwait(false));
+                var r = doc.RootElement;
+                if (r.TryGetProperty("lat", out var la) && la.ValueKind == JsonValueKind.Number)
+                    return (la.GetDouble(), r.GetProperty("lon").GetDouble(), Str(r, "city"));
+            }
+            catch { }
+            return null;
+        }
+
+        private static string Str(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+        private static string WeatherCachePath =>
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "weather.cache.json");
+
+        private void LoadWeatherCache()
+        {
+            try
+            {
+                if (!File.Exists(WeatherCachePath)) return;
+                var d = JsonSerializer.Deserialize<WeatherData>(File.ReadAllText(WeatherCachePath));
+                if (d == null || string.IsNullOrEmpty(d.City) || d.Updated == default) return;
+                lock (_wxLock) { if (_wx == null) _wx = d; }
+            }
+            catch { }
+        }
+
+        private static void SaveWeatherCache(WeatherData wx)
+        {
+            try { File.WriteAllText(WeatherCachePath, JsonSerializer.Serialize(wx)); } catch { }
+        }
 
         private void LogError(string msg)
         {

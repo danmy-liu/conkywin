@@ -29,13 +29,22 @@ namespace ConkyWin
 
         private PerformanceCounter _cpuCounter;
         private PerformanceCounter _procCounter;
+        private PerformanceCounter _diskIoCounter;
         private ulong _totalMem;
         private long _lastRx, _lastTx;
         private DateTime _lastNetSample = DateTime.MinValue;
         private int _gpuTick = 0;
         private Config _cfg = new Config();
-        private FileSystemWatcher _cfgWatcher;
         private readonly DispatcherTimer _timer;
+        private DispatcherTimer _posTimer;
+
+        // 热重载：轮询配置文件/脚本的最后修改时间（比 FileSystemWatcher 可靠，
+        // 编辑器"写临时文件再改名"的保存方式不会触发 Changed 事件）
+        private string _cfgPath, _scriptPath;
+        private DateTime _cfgStamp, _scriptStamp;
+
+        // 内置面板的控件缓存：完整脚本模式会清空 RootPanel，退出脚本模式时要还原
+        private List<UIElement> _builtinChildren;
 
         // Lua 脚本宿主（script.lua 可选）与数据快照（每秒由 FillSnapshot 填充）
         private readonly ScriptHost _scriptHost = new ScriptHost();
@@ -55,48 +64,41 @@ namespace ConkyWin
             {
                 // 加载配置（exe 同目录 config.json，不存在则自动生成默认）
                 _cfg = LoadConfig() ?? new Config();
+                Log("config 已加载 PanelWidth=" + _cfg.PanelWidth + " FontSize=" + _cfg.FontSize +
+                    " RightGap=" + _cfg.Position.RightGap);
                 var hwnd = new WindowInteropHelper(this).Handle;
                 // 点击穿透 + 工具窗口（不抢焦点、不挡鼠标）
                 int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
                 SetWindowLong(hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW);
-                // 压到桌面层（等效 Conky below），位置取配置
-                SetWindowPos(hwnd, (IntPtr)HWND_BOTTOM, _cfg.Position.X, _cfg.Position.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                // 先应用配置（含固定宽度），再落位（右对齐依赖宽度）
                 ApplyConfig(_cfg);
+                // 壁纸之上、图标之下（等效 Conky below）
+                PlaceWindow();
+
+                // 定期校正落位（防 explorer 重启 / Z 序被其他程序打乱）
+                _posTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+                _posTimer.Tick += (s2, e2) => { try { PlaceWindow(); } catch { } };
+                _posTimer.Start();
+
+                // 内置面板控件缓存（完整脚本模式会清空 RootPanel，切回来时要还原）
+                _builtinChildren = RootPanel.Children.Cast<UIElement>().ToList();
 
                 // Lua 脚本（可选）：exe 同目录 script.lua，不存在则一切行为与内置版一致
+                _scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "script.lua");
                 _scriptHost.FontSize = _cfg.FontSize;
                 _scriptHost.TimeFontSize = _cfg.TimeFontSize;
-                _scriptHost.Load(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "script.lua"), _snap);
+                _scriptHost.WeatherLat = _cfg.Weather.Lat;
+                _scriptHost.WeatherLon = _cfg.Weather.Lon;
+                _scriptHost.WeatherCity = _cfg.Weather.City;
+                _scriptHost.Load(_scriptPath, _snap);
                 if (_scriptHost.Loaded)
                     Log("script.lua 已加载，mode=" + (_scriptHost.FullMode ? "full(conky_rows)" : "enhance(hooks)"));
 
-                // 配置热重载：改 config.json 保存后自动生效
-                string cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-                try
-                {
-                    _cfgWatcher = new FileSystemWatcher(AppDomain.CurrentDomain.BaseDirectory, "config.json");
-                    DateTime lastReload = DateTime.MinValue;
-                    _cfgWatcher.Changed += (s, ev) =>
-                    {
-                        try
-                        {
-                            // 编辑器保存时会连发多次 Changed 事件，200ms 内只处理一次
-                            if ((DateTime.Now - lastReload).TotalMilliseconds < 200) return;
-                            lastReload = DateTime.Now;
-                            Dispatcher.Invoke(() =>
-                            {
-                                var c = LoadConfig();
-                                if (c == null) return;
-                                _cfg = c;
-                                SetWindowPos(hwnd, (IntPtr)HWND_BOTTOM, c.Position.X, c.Position.Y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-                                ApplyConfig(c);
-                            });
-                        }
-                        catch { }
-                    };
-                    _cfgWatcher.EnableRaisingEvents = true;
-                }
-                catch { }
+                // 配置 / 脚本热重载：记录当前修改时间，Update() 中每秒比一次
+                _cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                _cfgStamp = FileStamp(_cfgPath);
+                _scriptStamp = FileStamp(_scriptPath);
+                Log("热重载已启用：config.json / script.lua（保存即生效，无需重启）");
             }
             catch { }
 
@@ -107,6 +109,7 @@ namespace ConkyWin
             }
             catch { }
             try { _procCounter = new PerformanceCounter("System", "Processes"); } catch { }
+            try { _diskIoCounter = new PerformanceCounter("PhysicalDisk", "Disk Bytes/sec", "_Total"); _diskIoCounter.NextValue(); } catch { }
 
             var m = new MEMORYSTATUSEX();
             m.dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>();
@@ -121,14 +124,92 @@ namespace ConkyWin
         private void OnClosed(object sender, EventArgs e)
         {
             _timer?.Stop();
-            try { _cfgWatcher?.Dispose(); } catch { }
+            _posTimer?.Stop();
             try { _cpuCounter?.Dispose(); } catch { }
             try { _procCounter?.Dispose(); } catch { }
+            try { _diskIoCounter?.Dispose(); } catch { }
+        }
+
+        // ---------- 热重载（配置 / 脚本） ----------
+
+        private static DateTime FileStamp(string path)
+        {
+            try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue; }
+            catch { return DateTime.MinValue; }
+        }
+
+        /// <summary>
+        /// 每秒比对 config.json / script.lua 的修改时间，变了就重新加载。
+        /// 用轮询而不是 FileSystemWatcher：VSCode、部分编辑器保存时是"写临时文件→改名覆盖"，
+        /// FileSystemWatcher 的 Changed 事件收不到（只会收到 Deleted/Renamed），表现为改了没反应。
+        /// </summary>
+        private void CheckHotReload()
+        {
+            try
+            {
+                var cs = FileStamp(_cfgPath);
+                if (cs != _cfgStamp)
+                {
+                    _cfgStamp = cs;
+                    var c = LoadConfig();
+                    if (c != null)
+                    {
+                        _cfg = c;
+                        ApplyConfig(c);
+                        PlaceWindow();
+                        Log("config.json 已重新加载（宽度/位置/字号/配色已生效）");
+                    }
+                    else Log("config.json 解析失败，保留原配置");
+                }
+
+                var ss = FileStamp(_scriptPath);
+                if (ss != _scriptStamp)
+                {
+                    _scriptStamp = ss;
+                    ReloadScript();
+                }
+            }
+            catch { }
+        }
+
+        private void ReloadScript()
+        {
+            bool wasFull = _scriptHost.Loaded && _scriptHost.FullMode;
+            _scriptHost.FontSize = _cfg.FontSize;
+            _scriptHost.TimeFontSize = _cfg.TimeFontSize;
+            _scriptHost.WeatherLat = _cfg.Weather.Lat;
+            _scriptHost.WeatherLon = _cfg.Weather.Lon;
+            _scriptHost.WeatherCity = _cfg.Weather.City;
+            _scriptHost.Load(_scriptPath, _snap);
+
+            if (_scriptHost.Loaded && _scriptHost.FullMode)
+            {
+                _dynRows.Clear(); _dynSigs.Clear();
+                RootPanel.Children.Clear();
+                Log("script.lua 已重新加载，mode=full(conky_rows)（曲线历史已重置）");
+            }
+            else
+            {
+                if (wasFull) ShowBuiltinPanel(); // 从完整脚本模式退回内置面板：还原控件
+                if (_scriptHost.Loaded) Log("script.lua 已重新加载，mode=enhance(hooks)");
+                else Log("script.lua 已移除或加载失败，回退内置面板");
+            }
+        }
+
+        /// <summary>把 RootPanel 内容还原为内置面板（退出完整脚本模式时调用）。</summary>
+        private void ShowBuiltinPanel()
+        {
+            _dynRows.Clear(); _dynSigs.Clear();
+            RootPanel.Children.Clear();
+            if (_builtinChildren == null) return;
+            foreach (var el in _builtinChildren) RootPanel.Children.Add(el);
+            ApplyConfig(_cfg);
         }
 
         private void Update()
         {
             FillSnapshot();
+            CheckHotReload();
 
             // 完整脚本模式：整面板由 script.lua 的 conky_rows() 生成
             if (_scriptHost.Loaded && _scriptHost.FullMode)
@@ -279,6 +360,8 @@ namespace ConkyWin
 
             try { s.Proc = (int)_procCounter.NextValue(); } catch { s.Proc = -1; }
 
+            try { if (_diskIoCounter != null) s.DiskIoKb = _diskIoCounter.NextValue() / 1024.0; } catch { }
+
             // GPU 数据由 UpdateGpu（每 2 秒）填充
         }
 
@@ -326,7 +409,7 @@ namespace ConkyWin
 
         private void SetBar(System.Windows.Shapes.Rectangle bar, double pct)
         {
-            double w = Math.Max(0, Math.Min(100, pct)) / 100.0 * ActualWidth;
+            double w = Math.Max(0, Math.Min(100, pct)) / 100.0 * RootPanel.ActualWidth;
             if (bar.Width != w) bar.Width = w;
         }
 
@@ -358,95 +441,149 @@ namespace ConkyWin
 
         private class DynRow
         {
+            public bool IsHr;
+            public Border Sep;
             public TextBlock Label, Value;
             public Border BarBg;
             public System.Windows.Shapes.Rectangle Bar;
+            public Canvas GraphCanvas;
         }
 
         private readonly List<DynRow> _dynRows = new List<DynRow>();
-        private readonly List<string> _dynLabels = new List<string>();
-        private readonly List<bool> _dynHasBar = new List<bool>();
+        private readonly List<string> _dynSigs = new List<string>();
+
+        private static string RowSig(ScriptHost.Row r) =>
+            r.Hr ? "hr" : r.Label + "|" + (r.Graph != null ? "g" + r.GraphHeight : "") + (r.Bar.HasValue ? "b" : "");
 
         private void RenderScriptPanel()
         {
             var rows = _scriptHost.GetRows();
             if (rows == null) return; // 脚本出错：保留上一帧画面
 
-            // 行结构（数量/标签/有无进度条）变化才重建控件，否则只刷新内容
+            // 行结构（数量/类型）变化才重建控件，否则只刷新内容
             bool changed = rows.Count != _dynRows.Count;
             if (!changed)
                 for (int i = 0; i < rows.Count; i++)
-                    if (_dynLabels[i] != rows[i].Label || _dynHasBar[i] != rows[i].Bar.HasValue) { changed = true; break; }
+                    if (_dynSigs[i] != RowSig(rows[i])) { changed = true; break; }
 
             if (changed)
             {
-                _dynRows.Clear(); _dynLabels.Clear(); _dynHasBar.Clear();
+                _dynRows.Clear(); _dynSigs.Clear();
                 RootPanel.Children.Clear();
                 foreach (var r in rows) AddDynRow(r);
+                PinWidth(); // 同步设置会被随后的布局周期顶回 XAML 默认值，布局完成后再钉一次
             }
 
             for (int i = 0; i < Math.Min(rows.Count, _dynRows.Count); i++)
                 RefreshDynRow(_dynRows[i], rows[i]);
         }
 
+        /// <summary>
+        /// 把窗口宽度钉到配置值。WPF 的 SizeToContent=Height 在内容重建时会把
+        /// 运行时设置的 Width 顶回 XAML 声明值（220），必须在布局周期结束后再设置一次。
+        /// </summary>
+        private void PinWidth()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_cfg.PanelWidth > 100 && Math.Abs(Width - _cfg.PanelWidth) > 0.5)
+                    Width = _cfg.PanelWidth;
+            }), DispatcherPriority.Loaded);
+        }
+
         private void AddDynRow(ScriptHost.Row r)
         {
             bool first = RootPanel.Children.Count == 0;
-            var grid = new Grid { Margin = new Thickness(0, first ? 0 : 7, 0, 0) };
-            var label = new TextBlock
+            var dr = new DynRow { IsHr = r.Hr };
+            if (r.Hr)
             {
-                Text = r.Label,
-                FontFamily = new FontFamily("Microsoft YaHei UI"),
-                FontSize = 11,
-                Foreground = Brush(_cfg.LabelColor),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            var value = new TextBlock
+                var sep = new Border
+                {
+                    Height = 2,
+                    CornerRadius = new CornerRadius(1),
+                    Background = Brush(r.Color ?? "#40FFFFFF"),
+                    Margin = new Thickness(0, first ? 0 : 7, 0, 0)
+                };
+                RootPanel.Children.Add(sep);
+                dr.Sep = sep;
+            }
+            else
             {
-                Text = r.Text,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = _cfg.FontSize,
-                FontWeight = _cfg.Bold ? FontWeights.Bold : FontWeights.Normal,
-                Foreground = Brush(r.Color ?? "#EAF2FC"),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            grid.Children.Add(label);
-            grid.Children.Add(value);
-            RootPanel.Children.Add(grid);
+                var grid = new Grid { Margin = new Thickness(0, first ? 0 : 7, 0, 0) };
+                var label = new TextBlock
+                {
+                    Text = r.Label,
+                    FontFamily = new FontFamily("Microsoft YaHei UI"),
+                    FontSize = 11,
+                    Foreground = Brush(_cfg.LabelColor),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var value = new TextBlock
+                {
+                    Text = r.Text,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = r.FontSize ?? _cfg.FontSize,
+                    FontWeight = _cfg.Bold ? FontWeights.Bold : FontWeights.Normal,
+                    Foreground = Brush(r.Color ?? "#EAF2FC"),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+                grid.Children.Add(label);
+                grid.Children.Add(value);
+                RootPanel.Children.Add(grid);
+                dr.Label = label;
+                dr.Value = value;
 
-            var dr = new DynRow { Label = label, Value = value };
-            if (r.Bar.HasValue)
-            {
-                var bg = new Border
+                if (r.Graph != null)
                 {
-                    Height = 4,
-                    CornerRadius = new CornerRadius(2),
-                    Background = Brush(_cfg.BarBackground),
-                    Margin = new Thickness(0, 3, 0, 0)
-                };
-                var bar = new System.Windows.Shapes.Rectangle
+                    var canvas = new Canvas
+                    {
+                        Height = r.GraphHeight,
+                        Margin = new Thickness(0, 3, 0, 0),
+                        ClipToBounds = true
+                    };
+                    RootPanel.Children.Add(canvas);
+                    dr.GraphCanvas = canvas;
+                }
+                else if (r.Bar.HasValue)
                 {
-                    RadiusX = 2,
-                    RadiusY = 2,
-                    Fill = Gradient(r.BarStart ?? "#EAF2FC", r.BarEnd ?? "#EAF2FC"),
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Width = 0
-                };
-                bg.Child = bar;
-                RootPanel.Children.Add(bg);
-                dr.BarBg = bg;
-                dr.Bar = bar;
+                    var bg = new Border
+                    {
+                        Height = 4,
+                        CornerRadius = new CornerRadius(2),
+                        Background = Brush(_cfg.BarBackground),
+                        Margin = new Thickness(0, 3, 0, 0)
+                    };
+                    var bar = new System.Windows.Shapes.Rectangle
+                    {
+                        RadiusX = 2,
+                        RadiusY = 2,
+                        Fill = Gradient(r.BarStart ?? "#EAF2FC", r.BarEnd ?? "#EAF2FC"),
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Width = 0
+                    };
+                    bg.Child = bar;
+                    RootPanel.Children.Add(bg);
+                    dr.BarBg = bg;
+                    dr.Bar = bar;
+                }
             }
             _dynRows.Add(dr);
-            _dynLabels.Add(r.Label);
-            _dynHasBar.Add(r.Bar.HasValue);
+            _dynSigs.Add(RowSig(r));
         }
 
         private void RefreshDynRow(DynRow dr, ScriptHost.Row r)
         {
+            if (dr.IsHr) return; // 分隔线无动态内容
+            dr.Label.Text = r.Label;
             dr.Value.Text = r.Text;
             dr.Value.Foreground = Brush(r.Color ?? "#EAF2FC");
-            if (dr.Bar != null && r.Bar.HasValue)
+            if (r.FontSize.HasValue) dr.Value.FontSize = r.FontSize.Value;
+            if (dr.GraphCanvas != null && r.Graph != null)
+            {
+                DrawGraph(dr.GraphCanvas, r.GraphColor ?? r.Color ?? "#FFFFFF", r.Graph);
+            }
+            else if (dr.Bar != null && r.Bar.HasValue)
             {
                 double w = Math.Max(0, Math.Min(100, r.Bar.Value)) / 100.0 * dr.BarBg.ActualWidth;
                 if (dr.Bar.Width != w) dr.Bar.Width = w;
@@ -455,15 +592,89 @@ namespace ConkyWin
             }
         }
 
+        private static void DrawGraph(Canvas canvas, string colorHex, List<double> series)
+        {
+            double w = canvas.ActualWidth, h = canvas.ActualHeight;
+            if (w <= 0 || h <= 0 || series == null || series.Count < 2) return;
+            canvas.Children.Clear();
+            var color = Brush(colorHex);
+            int n = series.Count;
+            var pts = new PointCollection();
+            for (int i = 0; i < n; i++)
+            {
+                double x = w * i / (n - 1);
+                double v = Math.Max(0, Math.Min(100, series[i]));
+                pts.Add(new Point(x, h - 1 - v / 100.0 * (h - 2)));
+            }
+            // 面积填充（同色 25% 透明）+ 实线描边
+            var fillPts = new PointCollection(pts);
+            fillPts.Add(new Point(w, h));
+            fillPts.Add(new Point(0, h));
+            var area = new System.Windows.Shapes.Polygon
+            {
+                Points = fillPts,
+                Fill = new SolidColorBrush(Color.FromArgb(0x40, color.Color.R, color.Color.G, color.Color.B))
+            };
+            canvas.Children.Add(area);
+            var line = new System.Windows.Shapes.Polyline { Points = pts, Stroke = color, StrokeThickness = 1 };
+            canvas.Children.Add(line);
+        }
+
         private void UpdateDynFonts(Config c)
         {
             foreach (var dr in _dynRows)
             {
+                if (dr.IsHr) continue;
                 dr.Label.Foreground = Brush(c.LabelColor);
                 dr.Value.FontSize = c.FontSize;
                 dr.Value.FontWeight = c.Bold ? FontWeights.Bold : FontWeights.Normal;
                 if (dr.BarBg != null) dr.BarBg.Background = Brush(c.BarBackground);
             }
+        }
+
+        /// <summary>
+        /// 把面板放到"壁纸之上、桌面图标之下"：
+        /// 找到承载桌面图标（SHELLDLL_DefView）的顶层窗口（Progman 或 WorkerW），插到它正下方。
+        /// 不用 HWND_BOTTOM 硬压底——它有概率把窗口压到壁纸层之下（实测偶发，表现为面板完全不可见）。
+        /// </summary>
+        /// <summary>右对齐模式下根据面板宽度和 RightGap 计算 X，否则用配置 X。</summary>
+        private int TargetX()
+        {
+            if (_cfg.Position.RightGap >= 0)
+                return (int)(SystemParameters.WorkArea.Right - ActualWidth - _cfg.Position.RightGap);
+            return _cfg.Position.X;
+        }
+
+        private void PlaceWindow()
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            int x = TargetX(), y = _cfg.Position.Y;
+            IntPtr iconLayer = FindIconLayer();
+            if (iconLayer != IntPtr.Zero && iconLayer != hwnd)
+                SetWindowPos(hwnd, iconLayer, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            else
+                SetWindowPos(hwnd, (IntPtr)HWND_BOTTOM, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+
+        private static IntPtr FindIconLayer()
+        {
+            IntPtr found = IntPtr.Zero;
+            EnumWindows((hwnd, lp) =>
+            {
+                var sb = new System.Text.StringBuilder(256);
+                GetClassName(hwnd, sb, 256);
+                string cls = sb.ToString();
+                if (cls == "Progman" || cls == "WorkerW")
+                {
+                    if (FindWindowEx(hwnd, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero)
+                    {
+                        found = hwnd;
+                        return false;
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+            return found;
         }
 
         // ---------- 配置文件 ----------
@@ -475,20 +686,27 @@ namespace ConkyWin
             {
                 if (File.Exists(path))
                 {
-                    var c = JsonSerializer.Deserialize<Config>(File.ReadAllText(path));
+                    var text = File.ReadAllText(path);
+                    if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1); // 去掉记事本等编辑器加的 BOM
+                    var c = JsonSerializer.Deserialize<Config>(text);
                     return c; // 解析失败返回 null，调用方保留现有配置
                 }
                 var def = new Config();
                 File.WriteAllText(path, JsonSerializer.Serialize(def, new JsonSerializerOptions { WriteIndented = true }));
                 return def;
             }
-            catch { return null; }
+            catch (Exception ex) { Log("config.json 解析失败: " + ex.Message); return null; }
         }
 
         private void ApplyConfig(Config c)
         {
             try
             {
+                if (c.PanelWidth > 100)
+                {
+                    Width = c.PanelWidth;
+                    PinWidth();
+                }
                 TimeVal.FontSize = c.TimeFontSize;
                 foreach (var tb in new[] { CpuVal, MemVal, DiskVal, NetVal, GpuVal, TempVal, ProcVal })
                     tb.FontSize = c.FontSize;
@@ -519,6 +737,13 @@ namespace ConkyWin
                 // 同步到 Lua 宿主；完整模式下动态行也要跟随字号/配色
                 _scriptHost.FontSize = c.FontSize;
                 _scriptHost.TimeFontSize = c.TimeFontSize;
+                bool wxChanged = _scriptHost.WeatherLat != c.Weather.Lat ||
+                                 _scriptHost.WeatherLon != c.Weather.Lon ||
+                                 _scriptHost.WeatherCity != (c.Weather.City ?? "");
+                _scriptHost.WeatherLat = c.Weather.Lat;
+                _scriptHost.WeatherLon = c.Weather.Lon;
+                _scriptHost.WeatherCity = c.Weather.City ?? "";
+                if (wxChanged) _scriptHost.InvalidateWeather(); // 改了城市/坐标立刻重抓
                 if (_scriptHost.Loaded && _scriptHost.FullMode) UpdateDynFonts(c);
             }
             catch { }
@@ -545,6 +770,7 @@ namespace ConkyWin
         public class Config
         {
             public Pos Position { get; set; } = new Pos();
+            public int PanelWidth { get; set; } = 220;   // 面板固定宽度（px），高度自适应
             public int FontSize { get; set; } = 13;
             public int TimeFontSize { get; set; } = 15;
             public bool Bold { get; set; } = true;
@@ -557,12 +783,24 @@ namespace ConkyWin
             public Item Gpu { get; set; } = new Item("#B78CFF", "#B78CFF", "#7A5CFF");
             public Item Temp { get; set; } = new Item("#FF6B6B", "", "");
             public Item Proc { get; set; } = new Item("#EAF2FC", "", "");
+            public Wx Weather { get; set; } = new Wx();
+        }
+
+        public class Wx
+        {
+            /// <summary>城市名，如 "宝鸡"；填了就用 Open-Meteo 地理编码取坐标（优先于 IP 定位）。</summary>
+            public string City { get; set; } = "";
+            /// <summary>纬度/经度；999 = 自动（先试 City，再试 IP 定位）。</summary>
+            public double Lat { get; set; } = 999;
+            public double Lon { get; set; } = 999;
         }
 
         public class Pos
         {
             public int X { get; set; } = 1680;
             public int Y { get; set; } = 360;
+            /// <summary>>=0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap；-1 表示禁用，直接用 X。</summary>
+            public int RightGap { get; set; } = -1;
         }
 
         public class Item
@@ -596,5 +834,13 @@ namespace ConkyWin
         }
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindWindowEx(IntPtr hWndParent, IntPtr hWndChildAfter, string lpszClass, string lpszWindow);
     }
 }
