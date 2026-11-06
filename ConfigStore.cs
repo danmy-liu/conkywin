@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -160,6 +161,39 @@ namespace ConkyWin
             return ThemeLine.Replace(lua, "local THEME = \"" + theme + "\"", 1);
         }
 
+        // ---------- 脚本 C 表配色同步 ----------
+
+        private static readonly Regex PaletteBlock = new Regex(
+            @"(?<head>\bC\s*=\s*\{)(?<body>.*?)(?<tail>\})",
+            RegexOptions.Compiled | RegexOptions.Singleline);
+
+        /// <summary>脚本是否含有可同步的 C 配色表（自定义脚本可能没有）。</summary>
+        public static bool HasPalette(string lua)
+        {
+            return !string.IsNullOrEmpty(lua) && PaletteBlock.IsMatch(lua);
+        }
+
+        /// <summary>
+        /// 把配置窗口里改过的颜色写回脚本的每个 C = { ... } 表（color / mono 两个分支都改）。
+        /// 只替换表中已存在的键，找不到就原样返回，绝不破坏自定义脚本。
+        /// </summary>
+        public static string SetPalette(string lua, Dictionary<string, string> changes)
+        {
+            if (string.IsNullOrEmpty(lua) || changes == null || changes.Count == 0) return lua;
+            return PaletteBlock.Replace(lua, m =>
+            {
+                string body = m.Groups["body"].Value;
+                foreach (var kv in changes)
+                {
+                    if (string.IsNullOrWhiteSpace(kv.Value)) continue;
+                    var re = new Regex(@"(\b" + Regex.Escape(kv.Key) + @"\s*=\s*)""[^""]*""",
+                                       RegexOptions.IgnoreCase);
+                    body = re.Replace(body, mm => mm.Groups[1].Value + "\"" + kv.Value + "\"");
+                }
+                return m.Groups["head"].Value + body + m.Groups["tail"].Value;
+            });
+        }
+
         /// <summary>命令行自测：ConkyWin.exe --selftest，结果写 exe 同目录 selftest.log。</summary>
         public static string SelfTest()
         {
@@ -213,6 +247,18 @@ namespace ConkyWin
                 string mono = SetTheme(def, "mono");
                 check("切换 THEME", GetTheme(mono) == "mono" && mono.Contains("local THEME = \"mono\""), "");
                 check("THEME 切换不动其它行", mono.Length > def.Length - 20, "");
+
+                check("识别 C 配色表", HasPalette(def) && !HasPalette("local x = 1"), "");
+                var pal = new Dictionary<string, string> { { "text", "#FF2020" }, { "label", "#20FF20" } };
+                string colored = SetPalette(def, pal);
+                check("C 表写入正文色", colored.Contains("text = \"#FF2020\""), "");
+                check("C 表写入标签色", colored.Contains("label = \"#20FF20\""), "");
+                check("C 表两分支同步", colored.Split(new[] { "text = \"#FF2020\"" },
+                      StringSplitOptions.None).Length - 1 == 2, "");
+                check("C 表同步不破坏脚本", colored.Contains("conky_rows") &&
+                      colored.Length > def.Length - 20, "");
+                check("自定义脚本颜色同步为空操作",
+                      SetPalette("local x = 1", pal) == "local x = 1", "");
             }
             catch (Exception ex) { check("自测过程无异常", false, ex.ToString()); }
             finally { try { Directory.Delete(dir, true); } catch { } }

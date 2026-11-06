@@ -1,7 +1,9 @@
 -- Harmattan 风格布局（复刻 Linux conky 主题，配合 config.json: PanelWidth=268, Position.RightGap=0）
 --
 -- 主题切换：把下面的 THEME 改成 "color"（彩色）或 "mono"（白色单色，原版风格），保存即生效（热重载）。
--- 想微调颜色直接改 C 表；也可以把自定义键写进 config.json，用 conky.config() 读取（见文末示例）。
+-- 配色只认下面的 C 表：text = 数值文字，label = 左侧小标签，cpu/mem/disk... = 曲线与进度条。
+-- 直接改这里、或在设置窗口「配色 / 脚本参数」页取色，两边都会同步，改完保存立即生效。
+-- 参数（曲线高度、Top 条数等）走 conky.config()，可以用自定义键写进 config.json（见文末示例）。
 local THEME = "color"
 
 local C
@@ -29,20 +31,9 @@ local SCALE_FLOOR_KB = cfg.ScaleFloorKb or 16   -- 速率曲线最低满格量�
 local GRAPH_H        = cfg.GraphHeight or 30    -- 曲线高度
 local TOP_N          = cfg.TopProcesses or 5    -- 进程列表条数
 
--- color 主题下，config.json 的颜色配置优先：改 config 的 Cpu.ValueColor 等即改脚本配色
-if THEME == "color" then
-    local function pick(v, fallback)
-        return (type(v) == "string" and #v > 0) and v or fallback
-    end
-    C.cpu      = pick(cfg.Cpu and cfg.Cpu.ValueColor, C.cpu)
-    C.mem      = pick(cfg.Mem and cfg.Mem.ValueColor, C.mem)
-    C.disk     = pick(cfg.Disk and cfg.Disk.ValueColor, C.disk)
-    C.net_down = pick(cfg.Net and cfg.Net.ValueColor, C.net_down)
-    C.gpu      = pick(cfg.Gpu and cfg.Gpu.ValueColor, C.gpu)
-    C.label    = pick(cfg.LabelColor, C.label)
-    C.text     = pick(cfg.TextColor, C.text)
-    C.accent   = pick(cfg.AccentColor, C.accent)
-end
+-- 说明：config.json 里的 LabelColor / Cpu.ValueColor 等只用于「内置简洁面板」（删掉本脚本时）。
+-- 使用本脚本时，配色以 C 表为准，避免两处配置互相覆盖导致「改了没反应」。
+-- 设置窗口保存颜色时会同步改写 C 表，所以在界面里取色同样有效。
 
 -- ============ 速率曲线自适应满格量 ============
 -- 固定满格量（比如 2MB/s）在平时几 K 的流量下会画成一条直线，看不出起伏。
@@ -221,6 +212,12 @@ function conky_rows()
     rows[#rows + 1] = { gap = 3 }
     for i, p in ipairs(conky.top_cpu(TOP_N)) do
         rows[#rows + 1] = { label = p.name, text = string.format("%.2f%%", p.cpu), color = C.text, font_size = 12 }
+    end
+
+    -- 把 C.label 注入每一行：渲染端优先读 label_color，否则才回退到 config.LabelColor。
+    -- 这样在脚本里改 C.label 就能直接改掉左侧所有小标签的颜色。
+    for _, r in ipairs(rows) do
+        if r.label_color == nil then r.label_color = C.label end
     end
 
     return rows

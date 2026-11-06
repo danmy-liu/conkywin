@@ -30,6 +30,7 @@ namespace ConkyWin
             public Func<string> Get;
             public Action<string> Set;
             public Action<bool> MarkValid;
+            public Action<bool> SetEnabled;
         }
 
         private readonly List<Field> _fields = new List<Field>();
@@ -111,12 +112,13 @@ namespace ConkyWin
             };
         }
 
-        private void Register(Field f)
+        private Field Register(Field f)
         {
             _fields.Add(f);
+            return f;
         }
 
-        private void AddNumber(Panel p, string label, string path, string def, Kind kind, string hint)
+        private Field AddNumber(Panel p, string label, string path, string def, Kind kind, string hint)
         {
             var row = NewRow(p);
             row.Children.Add(NewLabel(label));
@@ -124,13 +126,61 @@ namespace ConkyWin
             tb.TextChanged += (s, e) => { if (!_loading) Changed(); };
             row.Children.Add(tb);
             row.Children.Add(NewHint(hint));
-            Register(new Field
+            return Register(new Field
             {
                 Path = path, Kind = kind, Default = def,
                 Get = () => tb.Text.Trim(),
                 Set = v => tb.Text = v,
+                SetEnabled = on => tb.IsEnabled = on,
                 MarkValid = ok => tb.BorderBrush = new SolidColorBrush(
                     ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A))
+            });
+        }
+
+        /// <summary>
+        /// 整数值下拉：把「人话」选项映射到配置里的整数值（如 RightGap 0 / -1）。
+        /// 配置里出现选项以外的值时，动态补一项「自定义值」，避免保存时被悄悄改掉。
+        /// </summary>
+        private Field AddComboNum(Panel p, string label, string path, int def,
+                                  Tuple<string, int>[] options, string hint, Action<int> onValue = null)
+        {
+            var row = NewRow(p);
+            row.Children.Add(NewLabel(label));
+            var cb = new ComboBox { Width = 230, FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center };
+            foreach (var o in options) cb.Items.Add(new ComboBoxItem { Content = o.Item1, Tag = o.Item2 });
+            cb.SelectionChanged += (s, e) =>
+            {
+                if (_loading) return;
+                Changed();
+                var it = cb.SelectedItem as ComboBoxItem;
+                if (onValue != null && it != null) onValue((int)it.Tag);
+            };
+            row.Children.Add(cb);
+            row.Children.Add(NewHint(hint));
+            return Register(new Field
+            {
+                Path = path, Kind = Kind.Int, Default = def.ToString(CultureInfo.InvariantCulture),
+                Get = () =>
+                {
+                    var it = cb.SelectedItem as ComboBoxItem;
+                    return it != null && it.Tag != null
+                        ? it.Tag.ToString() : def.ToString(CultureInfo.InvariantCulture);
+                },
+                Set = v =>
+                {
+                    ComboBoxItem found = null;
+                    foreach (ComboBoxItem it in cb.Items)
+                        if (it.Tag != null && it.Tag.ToString() == v) { found = it; break; }
+                    if (found == null)
+                    {
+                        int n;
+                        if (!int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) n = def;
+                        found = new ComboBoxItem { Content = "自定义值 (" + v + ")", Tag = n };
+                        cb.Items.Add(found);
+                    }
+                    cb.SelectedItem = found;
+                    if (onValue != null) onValue((int)found.Tag);
+                }
             });
         }
 
@@ -250,11 +300,20 @@ namespace ConkyWin
         private void BuildGeneral()
         {
             var p = GeneralPanel;
-            AddSection(p, "位置", "RightGap ≥ 0 时按屏幕右边缘对齐，X 会被忽略；-1 则用 X 的绝对值。BottomGap 防止面板超出屏幕下边缘。");
-            AddNumber(p, "X（像素）", "Position.X", "1652", Kind.Int, "屏幕左侧起算");
-            AddNumber(p, "Y（像素）", "Position.Y", "300", Kind.Int, "屏幕顶部起算");
-            AddNumber(p, "RightGap", "Position.RightGap", "0", Kind.Int, "≥0 右对齐；-1 关闭");
-            AddNumber(p, "BottomGap", "Position.BottomGap", "8", Kind.Int, "距屏幕底边最少留白");
+            AddSection(p, "位置", "默认贴屏幕右缘。想用 X / Y 自由摆放，请把「定位方式」改成绝对坐标；改动约 1 秒后生效。");
+            Field fx = AddNumber(p, "X（像素）", "Position.X", "1652", Kind.Int, "屏幕左侧起算");
+            Field fy = AddNumber(p, "Y（像素）", "Position.Y", "300", Kind.Int, "屏幕顶部起算");
+            AddComboNum(p, "定位方式", "Position.RightGap", 0, new[]
+            {
+                Tuple.Create("右对齐（贴屏幕右边，忽略 X）", 0),
+                Tuple.Create("绝对坐标（使用 X / Y）", -1)
+            }, "选绝对坐标后 X / Y 才会生效",
+                v => { bool abs = v < 0; fx.SetEnabled?.Invoke(abs); fy.SetEnabled?.Invoke(abs); });
+            AddComboNum(p, "下边界", "Position.BottomGap", 8, new[]
+            {
+                Tuple.Create("自动上移，保证面板完整显示", 8),
+                Tuple.Create("不限制，完全按 Y 摆放", -1)
+            }, "面板很高时「自动上移」会覆盖你填的 Y；想让 Y 精确生效请选「不限制」。其它数值可在原始 JSON 页改。");
 
             AddSection(p, "字体与尺寸", "改动会在 1 秒后直接反映到桌面面板上。");
             AddSlider(p, "面板宽度", "PanelWidth", 268, 120, 800, "像素");
@@ -271,7 +330,7 @@ namespace ConkyWin
         private void BuildColors()
         {
             var p = ColorsPanel;
-            AddSection(p, "全局", "支持 #RRGGBB 与带透明度的 #AARRGGBB；取色按钮会保留原有的透明度前缀。");
+            AddSection(p, "全局", "支持 #RRGGBB 与带透明度的 #AARRGGBB。使用 Harmattan 脚本时，这里的颜色会同步写入脚本 C 表，所以界面取色和直接改脚本都有效；进度条渐变只作用于内置面板。");
             AddColor(p, "标签颜色", "LabelColor", "#A6BAD1", "CPU / MEM 等标签");
             AddColor(p, "进度条底色", "BarBackground", "#26FFFFFF", "半透明槽底");
 
@@ -300,7 +359,7 @@ namespace ConkyWin
             AddSlider(p, "曲线高度", "GraphHeight", 30, 10, 80, "像素");
             AddSlider(p, "Top 进程条数", "TopProcesses", 5, 1, 15, "内存与 CPU 两个列表各自的行数");
             AddSlider(p, "速率曲线下限", "ScaleFloorKb", 16, 4, 1024, "KB/s，自适应满格量的下限");
-            AddSection(p, "脚本文字配色", "只在 color 主题下生效；mono 主题统一白色。");
+            AddSection(p, "脚本文字配色", "会同步写入脚本的 C.text / C.accent（两个主题分支都写）。也可以直接在「Lua 脚本」页改 C 表，改完保存立即生效。");
             AddColor(p, "正文颜色", "TextColor", "#F2F7FF", "");
             AddColor(p, "强调色", "AccentColor", "#4DE3E0", "");
         }
@@ -425,6 +484,7 @@ namespace ConkyWin
             _saveTimer.Stop();
             JsonObject cand = ConfigStore.Parse(ConfigStore.ToJson(_root));
             bool bad = false;
+            var palette = new Dictionary<string, string>();
             foreach (Field f in _fields)
             {
                 string cur = f.Get();
@@ -434,6 +494,11 @@ namespace ConkyWin
                 f.MarkValid?.Invoke(true);
                 f.Loaded = cur;
                 ConfigStore.Set(cand, f.Path, node);
+                if (f.Kind == Kind.Color)
+                {
+                    string key = PaletteKey(f.Path);
+                    if (key != null) palette[key] = cur;
+                }
             }
             if (bad)
             {
@@ -447,6 +512,7 @@ namespace ConkyWin
                 _root = cand;
                 _configDirty = false;
                 RefreshRaw();
+                SyncPalette(palette);
                 StatusText.Text = "已保存 · " + DateTime.Now.ToString("HH:mm:ss") + " · 约 1 秒后面板生效";
             }
             catch (Exception ex)
@@ -454,6 +520,45 @@ namespace ConkyWin
                 StatusText.Text = "保存失败：" + ex.Message;
                 MessageBox.Show("写入 config.json 失败：\r\n" + ex.Message,
                     "ConkyWin 设置", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// 完整脚本模式的渲染只认脚本里的 C 表，所以颜色控件光写 config.json 会「改了没反应」。
+        /// 这里把本次真正改动的字段同步写入 C 表（两个主题分支都写），再保存脚本触发热重载。
+        /// </summary>
+        private void SyncPalette(Dictionary<string, string> palette)
+        {
+            if (palette.Count == 0 || !ConfigStore.HasPalette(LuaEditor.Text)) return;
+            string next = ConfigStore.SetPalette(LuaEditor.Text, palette);
+            if (next == LuaEditor.Text) return;
+            try
+            {
+                ConfigStore.AtomicWrite(ConfigStore.ScriptPath, next);
+                _luaLoading = true;
+                LuaEditor.Text = next;
+                _luaLoading = false;
+                _luaSaved = next;
+                _luaDirty = false;
+                LuaStatus.Text = "配色已同步到脚本 C 表 · 约 1 秒后生效";
+            }
+            catch (Exception ex) { StatusText.Text = "颜色同步到脚本失败：" + ex.Message; }
+        }
+
+        /// <summary>配置键 → 脚本 C 表键；返回 null 表示该键只作用于内置面板。</summary>
+        private static string PaletteKey(string path)
+        {
+            switch (path)
+            {
+                case "LabelColor": return "label";
+                case "TextColor": return "text";
+                case "AccentColor": return "accent";
+                case "Cpu.ValueColor": return "cpu";
+                case "Mem.ValueColor": return "mem";
+                case "Disk.ValueColor": return "disk";
+                case "Net.ValueColor": return "net_down";
+                case "Gpu.ValueColor": return "gpu";
+                default: return null;
             }
         }
 

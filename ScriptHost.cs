@@ -78,7 +78,8 @@ namespace ConkyWin
             public string Text = "";
             public string Icon;         // 非 null → 行尾渲染图标（路径，相对 exe 目录或绝对路径）
             public double IconSize = 20;
-            public string Color;        // null → 用默认色
+            public string Color;        // null → 用默认色（数值文字）
+            public string LabelColor;   // null → 用 config.LabelColor（左侧小标签）
             public double? Bar;         // null → 该行无进度条
             public string BarStart;
             public string BarEnd;
@@ -384,6 +385,7 @@ namespace ConkyWin
                         Label = GetStr(t.Get("label")),
                         Text = GetStr(t.Get("text")),
                         Color = GetOptStr(t.Get("color")),
+                        LabelColor = GetOptStr(t.Get("label_color")),
                         BarStart = GetOptStr(t.Get("bar_start")),
                         BarEnd = GetOptStr(t.Get("bar_end")),
                         GraphColor = GetOptStr(t.Get("graph_color")),

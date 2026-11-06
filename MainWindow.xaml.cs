@@ -522,6 +522,7 @@ namespace ConkyWin
             public System.Windows.Shapes.Polygon GraphArea;   // 曲线图元复用（避免每帧重建控件导致闪烁）
             public System.Windows.Shapes.Polyline GraphLine;
             public string GraphColorStr;
+            public string LabelColorStr;   // 行自带的标签色（脚本 label_color），优先于 config.LabelColor
             public double GraphH;
             public TextBlock[] CellLabels, CellTexts, CellSubs;
             public Image[] CellIcons;
@@ -582,7 +583,7 @@ namespace ConkyWin
         private void AddDynRow(ScriptHost.Row r)
         {
             bool first = RootPanel.Children.Count == 0;
-            var dr = new DynRow { IsHr = r.Hr };
+            var dr = new DynRow { IsHr = r.Hr, LabelColorStr = r.LabelColor };
 
             if (r.Gap > 0) // 空白间隔行（分区留白）
             {
@@ -612,7 +613,7 @@ namespace ConkyWin
                         Text = c.Label,
                         FontFamily = new FontFamily("Microsoft YaHei UI"),
                         FontSize = 11,
-                        Foreground = Brush(_cfg.LabelColor),
+                        Foreground = Brush(r.LabelColor ?? _cfg.LabelColor),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 2)
                     };
@@ -683,7 +684,7 @@ namespace ConkyWin
                     Text = r.Label,
                     FontFamily = new FontFamily("Microsoft YaHei UI"),
                     FontSize = 11,
-                    Foreground = Brush(_cfg.LabelColor),
+                    Foreground = Brush(r.LabelColor ?? _cfg.LabelColor),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 var value = new TextBlock
@@ -766,6 +767,7 @@ namespace ConkyWin
             if (dr.IsHr || dr.IsGap) return; // 分隔线/间隔无动态内容
             if (dr.IsColumns && r.Cells != null)
             {
+                dr.LabelColorStr = r.LabelColor;
                 for (int i = 0; i < Math.Min(dr.CellTexts.Length, r.Cells.Count); i++)
                 {
                     var c = r.Cells[i];
@@ -775,6 +777,7 @@ namespace ConkyWin
                     var brush = Brush(c.Color ?? "#F2F7FF");
                     dr.CellTexts[i].Foreground = brush;
                     dr.CellSubs[i].Foreground = brush;
+                    dr.CellLabels[i].Foreground = Brush(r.LabelColor ?? _cfg.LabelColor);
                     if (dr.CellIcons[i] != null && c.Icon != null)
                     {
                         dr.CellIcons[i].Width = dr.CellIcons[i].Height = c.IconSize;
@@ -786,6 +789,8 @@ namespace ConkyWin
             }
             dr.Label.Text = r.Label;
             dr.Value.Text = r.Text;
+            dr.LabelColorStr = r.LabelColor;
+            dr.Label.Foreground = Brush(r.LabelColor ?? _cfg.LabelColor);
             dr.Value.Foreground = Brush(r.Color ?? "#F2F7FF");
             if (r.FontSize.HasValue) dr.Value.FontSize = r.FontSize.Value;
             if (dr.ValueIcon != null && r.Icon != null)
@@ -869,10 +874,10 @@ namespace ConkyWin
                 if (dr.IsHr || dr.IsGap) continue;
                 if (dr.IsColumns)
                 {
-                    foreach (var l in dr.CellLabels) if (l != null) l.Foreground = Brush(c.LabelColor);
+                    foreach (var l in dr.CellLabels) if (l != null) l.Foreground = Brush(dr.LabelColorStr ?? c.LabelColor);
                     continue;
                 }
-                dr.Label.Foreground = Brush(c.LabelColor);
+                dr.Label.Foreground = Brush(dr.LabelColorStr ?? c.LabelColor);
                 dr.Value.FontSize = c.FontSize;
                 dr.Value.FontWeight = c.Bold ? FontWeights.Bold : FontWeights.Normal;
                 if (dr.BarBg != null) dr.BarBg.Background = Brush(c.BarBackground);
@@ -900,7 +905,8 @@ namespace ConkyWin
             double waBottom = SystemParameters.WorkArea.Bottom;
             double waTop = SystemParameters.WorkArea.Top;
             double h = ActualHeight > 10 ? ActualHeight : 0;
-            if (h > 10 && y + h > waBottom - _cfg.Position.BottomGap)
+            // BottomGap < 0 表示「不限制」：完全按配置的 Y 摆放，允许面板超出屏幕下边缘
+            if (_cfg.Position.BottomGap >= 0 && h > 10 && y + h > waBottom - _cfg.Position.BottomGap)
                 y = (int)Math.Max(waTop, waBottom - _cfg.Position.BottomGap - h);
             return y;
         }
