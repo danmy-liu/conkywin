@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 标签时自动编译、打包自包含发行包，并创建 GitHub Release
+# 推送 v* 标签时自动编译、打出「便携 zip + 安装 exe」并创建 GitHub Release
 # 也可在 Actions 页面手动 Run workflow，指定标签重发某个版本
 on:
   push:
@@ -27,7 +27,26 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: 打包自包含发行包
+      - name: 准备 Inno Setup 6.7.4 编译器
+        shell: pwsh
+        run: |
+          # 固定与本地相同的编译器版本：中文语言文件要求 6.5.0+
+          # 用户级静默安装，不需要管理员权限，也不写 Program Files
+          $tools = Join-Path $env:LOCALAPPDATA 'ConkyWinBuildTools'
+          $iscc  = Join-Path $tools 'IS6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            New-Item -ItemType Directory -Path $tools -Force | Out-Null
+            $pkg = Join-Path $tools 'innosetup-6.7.4.exe'
+            Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe' -OutFile $pkg
+            Start-Process -FilePath $pkg -ArgumentList @(
+              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER',
+              "/DIR=$tools\IS6", '/NOICONS', '/TASKS='
+            ) -Wait
+          }
+          if (-not (Test-Path $iscc)) { throw 'Inno Setup 编译器准备失败' }
+          "CONKYWIN_ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: 打便携包与安装程序
         shell: pwsh
         run: ./build-release.ps1
 
@@ -43,12 +62,19 @@ jobs:
         with:
           name: ConkyWin v${{ steps.ver.outputs.version }}
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/ConkyWin-${{ steps.ver.outputs.version }}-win-x64.zip
+          files: |
+            dist/ConkyWin-${{ steps.ver.outputs.version }}-setup.exe
+            dist/ConkyWin-${{ steps.ver.outputs.version }}-win-x64.zip
           generate_release_notes: false
           body: |
             ConkyWin v${{ steps.ver.outputs.version }}
 
-            下载 `ConkyWin-${{ steps.ver.outputs.version }}-win-x64.zip`，解压后双击 `ConkyWin.exe` 即可运行，无需安装 .NET。
+            ## 推荐：安装版 `ConkyWin-${{ steps.ver.outputs.version }}-setup.exe`
 
-            自包含单文件发行包（.NET 8 运行时已打包进 exe），适用于 Windows 10/11 x64。
-            详细说明与配置方法见仓库 README。
+            双击运行安装向导，可以自定义安装位置，勾选桌面 / 开始菜单快捷方式、开机自启与安装完成后立即运行；卸载请走「设置 → 应用」或开始菜单里的卸载入口，卸载时会询问是否保留个人配置。
+
+            ## 绿色版 `ConkyWin-${{ steps.ver.outputs.version }}-win-x64.zip`
+
+            解压到任意目录，双击 `ConkyWin.exe` 即可运行，无需安装、无需 .NET 运行时。配置和 Lua 脚本就在 exe 同目录。
+
+            两个包都内含 .NET 8 运行时（自包含单文件），适用于 Windows 10/11 x64。详细说明与配置方法见仓库 README。

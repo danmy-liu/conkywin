@@ -21,10 +21,11 @@ namespace ConkyWin
     /// </summary>
     public static class ConfigStore
     {
-        public static string BaseDir { get { return AppDomain.CurrentDomain.BaseDirectory; } }
-        public static string ConfigPath { get { return Path.Combine(BaseDir, "config.json"); } }
-        public static string ScriptPath { get { return Path.Combine(BaseDir, "script.lua"); } }
-        public static string BackupPath { get { return Path.Combine(BaseDir, "config.json.bak"); } }
+        /// <summary>用户可写目录：安装版在 %LOCALAPPDATA%\ConkyWin，便携版在 exe 同目录。</summary>
+        public static string BaseDir { get { return AppPaths.DataDir; } }
+        public static string ConfigPath { get { return AppPaths.ConfigPath; } }
+        public static string ScriptPath { get { return AppPaths.ScriptPath; } }
+        public static string BackupPath { get { return AppPaths.BackupPath; } }
 
         /// <summary>读文本并剥掉 BOM；文件不存在返回 null。</summary>
         public static string ReadText(string path)
@@ -343,6 +344,53 @@ namespace ConkyWin
                       Get(styled, "Styles.weather_info.Size") == "17", "");
                 check("分区块写入不丢自定义键", Get(styled, "Keep") == "9" &&
                       Get(styled, "Styles.weather_city.Font") == "KaiTi", "");
+
+                // 安装版 / 便携版的路径分流（安装到 Program Files 时配置必须写到用户目录）
+                string inst = Path.Combine(dir, "inst");
+                Directory.CreateDirectory(inst);
+                string userRoot = Path.Combine(dir, "userdata");
+                check("便携模式配置留在 exe 目录",
+                      AppPaths.ResolveDataDir(inst, userRoot, null) == inst, "");
+                File.WriteAllText(Path.Combine(inst, AppPaths.InstalledFlag), "1");
+                check("安装版配置走用户数据目录",
+                      AppPaths.ResolveDataDir(inst, userRoot, null) == userRoot, "");
+                File.WriteAllText(Path.Combine(inst, AppPaths.PortableFlag), "1");
+                check("portable.flag 优先于 installed.flag",
+                      AppPaths.ResolveDataDir(inst, userRoot, null) == inst, "");
+                string custom = Path.Combine(dir, "custom");
+                check("环境变量可覆盖数据目录",
+                      AppPaths.ResolveDataDir(inst, userRoot, custom) == custom, "");
+                string ro = Path.Combine(dir, "no-such-parent", "readonly");
+                check("安装目录不可写时回退用户目录",
+                      AppPaths.ResolveDataDir(ro, userRoot, null) == userRoot, "");
+
+                // 端到端：config.json 的 Styles 是否真的落到 Lua 行的字号/字体上。
+                // 把天气数据源换成固定表，避免自测依赖网络或缓存。
+                string probe = def.Replace("local w = conky.weather()",
+                    "local w = { city = 'Baoji', temp = 20, code = 0, humidity = 50, wind = 3, pressure = 1000, daily = {} }");
+                string sp = Path.Combine(dir, "probe.lua");
+                File.WriteAllText(sp, probe, new UTF8Encoding(false));
+                var host = new ScriptHost();
+                host.ConfigJson = "{\"Styles\":{" +
+                    "\"weather_city\":{\"Size\":30,\"LabelSize\":22,\"Font\":\"KaiTi\",\"LabelFont\":\"SimSun\"}," +
+                    "\"weather_forecast\":{\"CellSize\":24,\"CellLabelSize\":13,\"CellSubSize\":12,\"CellFont\":\"Consolas\"}}}";
+                bool loaded = host.Load(sp, new ScriptHost.Snapshot());
+                var rows = loaded ? host.GetRows() : null;
+                ScriptHost.Row city = rows == null ? null : rows.Find(r => r.FontSize == 30);
+                ScriptHost.Row fc = rows == null ? null : rows.Find(r => r.CellFontSize == 24);
+                check("Styles 经 conky.config() 注入 Lua", loaded && rows != null && rows.Count > 0,
+                      "loaded=" + loaded + " rows=" + (rows == null ? -1 : rows.Count));
+                check("城市名字号来自 LabelSize", city != null && city.LabelFontSize == 22,
+                      city == null ? "找不到 weather_city 行" : "LabelFontSize=" + city.LabelFontSize);
+                check("城市名字体来自 LabelFont", city != null && city.LabelFontFamily == "SimSun",
+                      city == null ? "找不到 weather_city 行" : "LabelFont=" + city.LabelFontFamily);
+                check("大字温度字号来自 Size", city != null && city.FontSize == 30, "");
+                check("大字温度字体来自 Font", city != null && city.FontFamily == "KaiTi",
+                      city == null ? "找不到 weather_city 行" : "Font=" + city.FontFamily);
+                check("多列三种字号可分别覆盖", fc != null && fc.CellLabelFontSize == 13 &&
+                      fc.CellSubFontSize == 12 && fc.CellFontFamily == "Consolas",
+                      fc == null ? "找不到 weather_forecast 行" : "CellLabel=" + fc.CellLabelFontSize +
+                      " CellSub=" + fc.CellSubFontSize);
             }
             catch (Exception ex) { check("自测过程无异常", false, ex.ToString()); }
             finally { try { Directory.Delete(dir, true); } catch { } }

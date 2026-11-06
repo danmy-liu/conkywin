@@ -18,6 +18,7 @@
   "CellLabelFontSize": 11,
   "CellSubFontSize": 11,
   "Styles": {},
+  "UiTheme": "light",
   "LabelColor": "#A6BAD1",
   "BarBackground": "#26FFFFFF",
   "Cpu": {

@@ -10,11 +10,16 @@
     <AssemblyName>ConkyWin</AssemblyName>
     <RootNamespace>ConkyWin</RootNamespace>
     <Platforms>AnyCPU</Platforms>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>ConkyWin</Product>
     <Description>Conky-style desktop system monitor widget for Windows, built with WPF.</Description>
     <NeutralLanguage>zh-CN</NeutralLanguage>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- dist 下会生成发行包与临时工具，别让 SDK 把里面的 .cs 示例当源码编译 -->
+    <Compile Remove="dist\**\*.cs" />
+    <None Remove="dist\**\*.cs" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="MoonSharp" Version="2.0.0" />
   </ItemGroup>

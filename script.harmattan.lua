@@ -34,6 +34,7 @@ local TOP_N          = cfg.TopProcesses or 5    -- 进程列表条数
 -- ============ 字体与字号：按区块覆盖 ============
 -- 每行用 style = "区块名" 标记；config.json 的 "Styles" 表里可以针对任意区块单独设：
 --   "Styles": { "weather_city": { "Size": 30, "LabelSize": 13, "Font": "等线" } }
+-- Size 管右侧数值（天气首行的大字温度），LabelSize 管左侧标签（同行的城市名），两者互不影响。
 -- 可用键：Size / LabelSize / CellSize / CellLabelSize / CellSubSize / Font / LabelFont / CellFont
 -- 不填就回退到 config 的全局 FontSize / FontFamily / LabelFontSize 等（设置窗口「字体」页）。
 -- 想加新区块：在行上加一个 style = "my_block"，设置窗口会自动列出它，不用改 C#。
@@ -300,6 +301,8 @@ end
       "top":              { "Size": 11 }
     }
 
+    Size = 右侧数值（天气首行的大字温度），LabelSize = 左侧标签（天气首行的城市名）。
+    想单独把城市名改大，改 LabelSize，或在设置窗口「字体」页改「城市名（左侧标签）」那一行。
     可用键：Size / LabelSize / CellSize / CellLabelSize / CellSubSize /
             Font / LabelFont / CellFont（字尺寸单位磅，0 或留空 = 跟随全局）
     想加新区块：在任意行上写 style = "my_block"，设置窗口就会自动列出它。

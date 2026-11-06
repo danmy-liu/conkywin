@@ -636,7 +636,7 @@ namespace ConkyWin
             e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
         private static string WeatherCachePath =>
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "weather.cache.json");
+            AppPaths.WeatherCachePath;
 
         private void LoadWeatherCache()
         {
@@ -661,7 +661,7 @@ namespace ConkyWin
             _lastError = msg;
             try
             {
-                File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log"),
+                File.AppendAllText(AppPaths.LogPath,
                     DateTime.Now.ToString("HH:mm:ss") + " [lua] " + msg + Environment.NewLine);
             }
             catch { }

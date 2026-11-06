@@ -1,0 +1,3 @@
+ConkyWin installed by Inno Setup.
+The program keeps user-editable files (config.json, script.lua, logs) in
+%LOCALAPPDATA%\ConkyWin instead of this (possibly read-only) install folder.

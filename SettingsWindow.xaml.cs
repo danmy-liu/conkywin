@@ -44,10 +44,94 @@ namespace ConkyWin
         private bool _luaLoading, _luaDirty;
         private string _luaSaved = "";
         private string _currentTheme = "color";
+        private string _uiTheme = "light";
+
+        // ---------- 外观主题：切换时替换资源字典里的画刷，DynamicResource 引用会实时刷新 ----------
+        // 顺序必须和下面两套色值一一对应。注意 WPF 会冻结资源里的 Freezable，
+        // 所以不能「改已有画刷的 Color」，只能整个替换对象。
+        private static readonly string[] BrushKeys =
+        {
+            "UiBg", "UiHeader", "UiPanel", "UiCard", "UiBorder", "UiText", "UiTextSub",
+            "UiAccent", "UiBtnBg", "UiBtnBorder", "UiTabBg", "UiTabActive", "UiTabHover",
+            "UiTabText", "UiFieldText", "UiInputBg", "UiError"
+        };
+        private static readonly string[] LightPalette =
+        {
+            "#F3F6FA", "#E9F0F8", "#FFFFFF", "#FAFCFF", "#C6D4E4", "#1B2A3B", "#5B7088",
+            "#0B7285", "#E2ECF7", "#A8C0D8", "#DFE9F4", "#FFFFFF", "#EFF6FD",
+            "#455B73", "#1B2A3B", "#FFFFFF", "#D64545"
+        };
+        private static readonly string[] DarkPalette =
+        {
+            "#141E2B", "#182534", "#1B2837", "#1A2836", "#33465C", "#EAF2FC", "#7E93AB",
+            "#4DE3E0", "#24384C", "#3A5570", "#1B2735", "#24374A", "#2A3E54",
+            "#9FB6D0", "#D8E6F5", "#1B2837", "#E24B4A"
+        };
+        private static Color HexColor(string hex)
+        {
+            return Color.FromRgb(
+                byte.Parse(hex.Substring(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+                byte.Parse(hex.Substring(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture),
+                byte.Parse(hex.Substring(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+        }
+
+        private static bool SystemUsesLightTheme()
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object v = k == null ? null : k.GetValue("AppsUseLightTheme");
+                    return !(v is int) || (int)v != 0;
+                }
+            }
+            catch { return true; } // 读不到就当浅色
+        }
+
+        /// <summary>
+        /// mode: light / dark / system（跟随 Windows 应用主题）。
+        /// 资源字典里的画刷会被 WPF 冻结，不能改 Color，只能整个替换对象；
+        /// 所有控件都用 DynamicResource 引用，替换后无需重建窗口即可实时换肤。
+        /// </summary>
+        public void ApplyTheme(string mode)
+        {
+            string m = mode == "dark" || mode == "system" ? mode : "light";
+            string effective = m == "system" ? (SystemUsesLightTheme() ? "light" : "dark") : m;
+            string[] pal = effective == "dark" ? DarkPalette : LightPalette;
+            for (int i = 0; i < BrushKeys.Length; i++)
+                Resources[BrushKeys[i]] = new SolidColorBrush(HexColor(pal[i]));
+            _uiTheme = m;
+        }
+
+        /// <summary>代码里动态创建的控件用动态资源绑定画刷，切主题时一起变。</summary>
+        private static void UseBrush(FrameworkElement d, DependencyProperty dp, string key)
+        {
+            d.SetResourceReference(dp, key);
+        }
+
+        private void RegisterUiThemeField()
+        {
+            Register(new Field
+            {
+                Path = "UiTheme", Kind = Kind.Text, Default = "light",
+                Get = () => ComboTag(ThemePicker, "light"),
+                Set = v => SelectCombo(ThemePicker, v, "light"),
+                MarkValid = BorderFlag(ThemePicker)
+            });
+        }
+
+        private void OnUiThemeChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || ThemePicker == null) return;
+            ApplyTheme(ComboTag(ThemePicker, "light"));
+            Changed();
+        }
 
         public SettingsWindow()
         {
             InitializeComponent();
+            ApplyTheme("light"); // 默认浅色；LoadConfig 会按 UiTheme 覆盖成用户上次的选法
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
             _saveTimer.Tick += (s, e) =>
             {
@@ -59,35 +143,41 @@ namespace ConkyWin
                 if (Tabs.SelectedIndex == 5 && !_rawDirty) RefreshRaw();
             };
 
+            RegisterUiThemeField();
             BuildGeneral();
             BuildColors();
             BuildFonts();
             BuildScriptParams();
             LoadConfig();
             LoadScript();
+            ApplyTheme(ComboTag(ThemePicker, "light"));
         }
 
         // ---------- 构建表单 ----------
 
-        private static void AddSection(Panel p, string title, string note)
+        private void AddSection(Panel p, string title, string note)
         {
-            p.Children.Add(new TextBlock
+            var head = new TextBlock
             {
                 Text = title,
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x4D, 0xE3, 0xE0)),
                 Margin = new Thickness(0, 14, 0, 3)
-            });
+            };
+            UseBrush(head, TextBlock.ForegroundProperty, "UiAccent");
+            p.Children.Add(head);
             if (!string.IsNullOrEmpty(note))
-                p.Children.Add(new TextBlock
+            {
+                var sub = new TextBlock
                 {
                     Text = note,
                     FontSize = 11,
-                    Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB)),
                     Margin = new Thickness(0, 0, 0, 6),
                     TextWrapping = TextWrapping.Wrap
-                });
+                };
+                UseBrush(sub, TextBlock.ForegroundProperty, "UiTextSub");
+                p.Children.Add(sub);
+            }
         }
 
         private static StackPanel NewRow(Panel p)
@@ -102,17 +192,18 @@ namespace ConkyWin
             return new TextBlock { Text = text, Width = 168, FontSize = 13 };
         }
 
-        private static TextBlock NewHint(string text)
+        private TextBlock NewHint(string text)
         {
-            return new TextBlock
+            var t = new TextBlock
             {
                 Text = text,
                 FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB)),
                 Margin = new Thickness(12, 0, 0, 0),
                 TextWrapping = TextWrapping.Wrap,
                 MaxWidth = 300
             };
+            UseBrush(t, TextBlock.ForegroundProperty, "UiTextSub");
+            return t;
         }
 
         private Field Register(Field f)
@@ -135,8 +226,7 @@ namespace ConkyWin
                 Get = () => tb.Text.Trim(),
                 Set = v => tb.Text = v,
                 SetEnabled = on => tb.IsEnabled = on,
-                MarkValid = ok => tb.BorderBrush = new SolidColorBrush(
-                    ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A))
+                MarkValid = BorderFlag(tb)
             });
         }
 
@@ -212,8 +302,7 @@ namespace ConkyWin
 
         private static Action<bool> BorderFlag(Control ctl)
         {
-            return ok => ctl.BorderBrush = new SolidColorBrush(
-                ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A));
+            return ok => UseBrush(ctl, Control.BorderBrushProperty, ok ? "UiBorder" : "UiError");
         }
 
         private static string ComboTag(ComboBox cb, string def)
@@ -294,64 +383,117 @@ namespace ConkyWin
         }
 
         /// <summary>
-        /// 一个区块一行：主字号 / 标签字号 / 字体。字号填 0 表示跟随全局，
-        /// 字体选「跟随全局」写空串。三个控件各自注册成 Field，保存时只写改动过的键。
+        /// 一个文字元素一行：中文名 + 字号 + 字体。
+        /// 每个控件单独注册成 Field，保存时只写改动过的键；字号填 0 = 跟随全局，字体选「跟随全局」写空串。
+        /// sizePath / fontPath 传 null 表示这一行没有该控件（多列区块的三行字共用一个字体）。
         /// </summary>
-        private void AddStyleRow(Panel p, string key, string name, double defSize, double defLabel, bool cells)
+        private void AddStyleField(Panel p, string caption, string sizePath, double defSize, string fontPath)
         {
             var row = NewRow(p);
-            row.Children.Add(new TextBlock
+            var capBlock = new TextBlock
             {
-                Text = name, Width = 168, FontSize = 12,
-                Foreground = new SolidColorBrush(Color.FromRgb(0xD8, 0xE6, 0xF5)),
+                Text = caption, Width = 190, FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap
-            });
-            var tbSize = new TextBox
-            {
-                Width = 56, TextAlignment = TextAlignment.Center,
-                ToolTip = "主字号；填 0 = 跟随全局"
             };
-            var tbLab = new TextBox
-            {
-                Width = 56, Margin = new Thickness(6, 0, 0, 0), TextAlignment = TextAlignment.Center,
-                ToolTip = "左侧标签字号；填 0 = 跟随全局"
-            };
-            var cb = new ComboBox
-            {
-                Width = 190, Margin = new Thickness(8, 0, 0, 0), FontSize = 12,
-                IsTextSearchEnabled = true, VerticalContentAlignment = VerticalAlignment.Center,
-                ToolTip = "该区块使用的字体"
-            };
-            FillFontCombo(cb);
-            tbSize.TextChanged += (s, e) => { if (!_loading) Changed(); };
-            tbLab.TextChanged += (s, e) => { if (!_loading) Changed(); };
-            cb.SelectionChanged += (s, e) => { if (!_loading) Changed(); };
-            row.Children.Add(tbSize);
-            row.Children.Add(tbLab);
-            row.Children.Add(cb);
+            UseBrush(capBlock, TextBlock.ForegroundProperty, "UiFieldText");
+            row.Children.Add(capBlock);
 
-            string kSize = cells ? "CellSize" : "Size";
-            string kLab = cells ? "CellLabelSize" : "LabelSize";
-            Register(new Field
+            if (sizePath != null)
             {
-                Path = "Styles." + key + "." + kSize, Kind = Kind.Double,
-                Default = defSize.ToString(CultureInfo.InvariantCulture),
-                Get = () => tbSize.Text.Trim(), Set = v => tbSize.Text = v,
-                MarkValid = BorderFlag(tbSize)
-            });
-            Register(new Field
+                var sizeTag = new TextBlock
+                {
+                    Text = "字号", FontSize = 11, Margin = new Thickness(0, 0, 6, 0)
+                };
+                UseBrush(sizeTag, TextBlock.ForegroundProperty, "UiTextSub");
+                row.Children.Add(sizeTag);
+                var tbSize = new TextBox
+                {
+                    Width = 52, TextAlignment = TextAlignment.Center,
+                    ToolTip = "字号（磅）；填 0 = 跟随全局"
+                };
+                tbSize.TextChanged += (s, e) => { if (!_loading) Changed(); };
+                row.Children.Add(tbSize);
+                Register(new Field
+                {
+                    Path = sizePath, Kind = Kind.Double,
+                    Default = defSize.ToString(CultureInfo.InvariantCulture),
+                    Get = () => tbSize.Text.Trim(), Set = v => tbSize.Text = v,
+                    MarkValid = BorderFlag(tbSize)
+                });
+            }
+
+            if (fontPath != null)
             {
-                Path = "Styles." + key + "." + kLab, Kind = Kind.Double,
-                Default = defLabel.ToString(CultureInfo.InvariantCulture),
-                Get = () => tbLab.Text.Trim(), Set = v => tbLab.Text = v,
-                MarkValid = BorderFlag(tbLab)
-            });
-            Register(new Field
+                var fontTag = new TextBlock
+                {
+                    Text = "字体", FontSize = 11, Margin = new Thickness(14, 0, 6, 0)
+                };
+                UseBrush(fontTag, TextBlock.ForegroundProperty, "UiTextSub");
+                row.Children.Add(fontTag);
+                var cb = new ComboBox
+                {
+                    Width = 200, FontSize = 12, IsTextSearchEnabled = true,
+                    VerticalContentAlignment = VerticalAlignment.Center,
+                    ToolTip = "系统字体；选「跟随全局」= 空"
+                };
+                FillFontCombo(cb);
+                cb.SelectionChanged += (s, e) => { if (!_loading) Changed(); };
+                row.Children.Add(cb);
+                Register(new Field
+                {
+                    Path = fontPath, Kind = Kind.Text, Default = "",
+                    Get = () => ComboTag(cb, ""), Set = v => SelectCombo(cb, v, ""),
+                    MarkValid = BorderFlag(cb)
+                });
+            }
+        }
+
+        /// <summary>
+        /// 一个区块一张卡片，把每类可见文字分别列出来，不再靠「主字号 / 标签字号」两列表头让人猜。
+        /// 普通行：左侧标签 + 右侧数值；多列行：列标题 + 中间数值 + 底部小字，各有独立字号。
+        /// </summary>
+        private void AddStyleBlock(Panel p, string key, string name, string[] caps,
+                                   double defSize, double defLabel, bool cells)
+        {
+            var card = new Border
             {
-                Path = "Styles." + key + ".Font", Kind = Kind.Text, Default = "",
-                Get = () => ComboTag(cb, ""), Set = v => SelectCombo(cb, v, ""),
-                MarkValid = BorderFlag(cb)
-            });
+                Margin = new Thickness(0, 5, 0, 5), Padding = new Thickness(12, 8, 12, 10),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5)
+            };
+            UseBrush(card, Border.BackgroundProperty, "UiCard");
+            UseBrush(card, Border.BorderBrushProperty, "UiBorder");
+            var box = new StackPanel();
+            var head = new TextBlock
+            {
+                Text = name, FontSize = 13, FontWeight = FontWeights.SemiBold
+            };
+            UseBrush(head, TextBlock.ForegroundProperty, "UiText");
+            box.Children.Add(head);
+            var note = new TextBlock
+            {
+                Text = "脚本标记 " + key + "  ·  字号填 0 = 跟随全局  ·  字体选「跟随全局」= 不覆盖",
+                FontSize = 10.5, Margin = new Thickness(0, 2, 0, 4)
+            };
+            UseBrush(note, TextBlock.ForegroundProperty, "UiTextSub");
+            box.Children.Add(note);
+
+            if (cells)
+            {
+                AddStyleField(box, caps[2], "Styles." + key + ".CellLabelSize", defLabel,
+                              "Styles." + key + ".LabelFont");
+                AddStyleField(box, caps[3], "Styles." + key + ".CellSize", defSize,
+                              "Styles." + key + ".CellFont");
+                AddStyleField(box, caps[4], "Styles." + key + ".CellSubSize", defLabel, null);
+            }
+            else
+            {
+                AddStyleField(box, caps[0], "Styles." + key + ".LabelSize", defLabel,
+                              "Styles." + key + ".LabelFont");
+                AddStyleField(box, caps[1], "Styles." + key + ".Size", defSize,
+                              "Styles." + key + ".Font");
+            }
+            card.Child = box;
+            p.Children.Add(card);
         }
 
         private void AddSlider(Panel p, string label, string path, int def, int min, int max, string hint)
@@ -395,8 +537,7 @@ namespace ConkyWin
                     if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)
                         && n >= min && n <= max) sl.Value = n;
                 },
-                MarkValid = ok => tb.BorderBrush = new SolidColorBrush(
-                    ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A))
+                MarkValid = BorderFlag(tb)
             });
         }
 
@@ -442,10 +583,10 @@ namespace ConkyWin
             var sw = new Border
             {
                 Width = 30, Height = 22, Margin = new Thickness(8, 0, 0, 0),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x46, 0x5C)),
                 BorderThickness = new Thickness(1),
                 Background = Brushes.Transparent
             };
+            UseBrush(sw, Border.BorderBrushProperty, "UiBorder");
             var btn = new Button { Content = "取色", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(9, 4, 9, 4) };
             btn.Click += (s, e) => PickColor(tb, sw);
             tb.TextChanged += (s, e) =>
@@ -462,8 +603,7 @@ namespace ConkyWin
                 Path = path, Kind = Kind.Color, Default = def,
                 Get = () => tb.Text.Trim(),
                 Set = v => { tb.Text = v; sw.Background = HexToBrush(v); },
-                MarkValid = ok => tb.BorderBrush = new SolidColorBrush(
-                    ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A))
+                MarkValid = BorderFlag(tb)
             });
         }
 
@@ -492,10 +632,8 @@ namespace ConkyWin
             AddNumber(p, "右缘留白", "Position.RightGap", "0", Kind.Int, "靠右时距屏幕右边缘的像素");
             AddNumber(p, "下缘留白", "Position.BottomGap", "8", Kind.Int, "靠下时距屏幕下边缘的像素");
 
-            AddSection(p, "字体与尺寸", "改动会在 1 秒后直接反映到桌面面板上。");
+            AddSection(p, "字体与尺寸", "改动会在 1 秒后直接反映到桌面面板上。正文字号 / 时间字号 / 所有字体统一在「字体」页设置，避免两处控件不同步。");
             AddSlider(p, "面板宽度", "PanelWidth", 268, 120, 800, "像素");
-            AddSlider(p, "正文字号", "FontSize", 13, 8, 28, "磅");
-            AddSlider(p, "时间字号", "TimeFontSize", 15, 8, 32, "磅");
             AddCheck(p, "粗体", "Bold", true, "数值与时间文字加粗");
 
             AddSection(p, "天气定位", "留空城市名并保持 999/999 时走 IP 自动定位；也可手动填经纬度。");
@@ -553,6 +691,30 @@ namespace ConkyWin
         {
             { "weather_forecast", 11 },
         };
+        /// <summary>每个区块里各类可见文字的中文名，避免「主字号 / 标签字号」这种要猜的说法。</summary>
+        private static readonly Dictionary<string, string[]> StyleCaptions = new Dictionary<string, string[]>
+        {
+            { "weather_city",     new[] { "城市名（左侧标签）", "大字温度（右侧数值）", "", "", "" } },
+            { "weather_desc",     new[] { "天气描述（左侧标签）", "行尾图标 / 文字", "", "", "" } },
+            { "weather_info",     new[] { "湿度 / 风速 / 气压 标签", "湿度 / 风速 / 气压 数值", "", "", "" } },
+            { "weather_error",    new[] { "天气（左侧标签）", "加载 / 重试提示", "", "", "" } },
+            { "weather_forecast", new[] { "", "", "星期标题（今天 / 明天 / 后天）", "中间数值 / 天气图标", "底部温度小字" } },
+            { "graph",            new[] { "Cpu: / Mem: / Down: 标签", "百分比 / 速率数值", "", "", "" } },
+            { "disk",             new[] { "盘符（左侧标签）", "用量百分比 / 容量", "", "", "" } },
+            { "total",            new[] { "累计（左侧标签）", "收 / 发 流量数值", "", "", "" } },
+            { "proc",             new[] { "Proc（左侧标签）", "进程总数", "", "", "" } },
+            { "top",              new[] { "进程名（左侧标签）", "内存 / CPU 数值", "", "", "" } },
+        };
+        private static readonly string[] DefaultCaps =
+        {
+            "左侧标签文字", "右侧数值文字", "多列标题", "多列数值", "多列小字"
+        };
+        /// <summary>多列区块：默认脚本写了 cells 的那几个，自定义脚本名字里带这些词也按多列处理。</summary>
+        private static bool IsCellsStyle(string key)
+        {
+            string k = key.ToLowerInvariant();
+            return k.Contains("forecast") || k.Contains("cell") || k.Contains("column");
+        }
         private List<string> DiscoverStyles()
         {
             var found = new List<string>();
@@ -579,24 +741,9 @@ namespace ConkyWin
             AddSlider(p, "多列小字字号", "CellSubFontSize", 11, 7, 30, "磅");
             AddSlider(p, "多列标题字号", "CellLabelFontSize", 11, 7, 30, "磅");
 
-            AddSection(p, "分区块覆盖", "区块名自动从 script.lua 识别：在脚本里给行加 style = \"xxx\"，这里就会多出一行。主字号 / 标签字号填 0 = 跟随全局。改完约 1 秒生效，不用动脚本。");
-            var head = NewRow(p);
-            head.Children.Add(NewLabel("区块"));
-            head.Children.Add(new TextBlock
-            {
-                Text = "主字号", Width = 56, FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
-            });
-            head.Children.Add(new TextBlock
-            {
-                Text = "标签字号", Width = 56, Margin = new Thickness(6, 0, 0, 0), FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
-            });
-            head.Children.Add(new TextBlock
-            {
-                Text = "字体（跟随全局 = 空）", Margin = new Thickness(8, 0, 0, 0), FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
-            });
+            AddSection(p, "分区块覆盖（逐项设置）",
+                "脚本里每个 style = \"xxx\" 区块单独一张卡片：城市名、大字温度、标签、数值、多列三行字都能各自设字号和字体。" +
+                "城市名属于「左侧标签」，大字温度属于「右侧数值」，两者互不干扰。字号填 0 = 跟随全局；改完约 1 秒生效，不用动脚本。");
             foreach (string key in DiscoverStyles())
             {
                 string name;
@@ -604,7 +751,9 @@ namespace ConkyWin
                 double ds, dl;
                 if (!StyleSizes.TryGetValue(key, out ds)) ds = 0;
                 if (!StyleLabelSizes.TryGetValue(key, out dl)) dl = 0;
-                AddStyleRow(p, key, name, ds, dl, key == "weather_forecast");
+                string[] caps;
+                if (!StyleCaptions.TryGetValue(key, out caps)) caps = DefaultCaps;
+                AddStyleBlock(p, key, name, caps, ds, dl, IsCellsStyle(key));
             }
         }
 
@@ -860,6 +1009,7 @@ namespace ConkyWin
                 ConfigStore.AtomicWrite(ConfigStore.ConfigPath, ConfigStore.ToJson(parsed));
                 _root = parsed;
                 BindFields();
+                ApplyTheme(ComboTag(ThemePicker, "light")); // 原始 JSON / 恢复默认可能改了 UiTheme
                 RefreshRaw();
                 StatusText.Text = successNote;
             }
@@ -1002,6 +1152,7 @@ namespace ConkyWin
 
         private void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (!IsLoaded) return; // 命令行自测会构造但不显示窗口，别弹保存提示
             if (_configDirty) SaveConfig();
             if (_luaDirty)
             {

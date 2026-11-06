@@ -89,7 +89,7 @@ namespace ConkyWin
                 _builtinChildren = RootPanel.Children.Cast<UIElement>().ToList();
 
                 // Lua 脚本（可选）：exe 同目录 script.lua，不存在则一切行为与内置版一致
-                _scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "script.lua");
+                _scriptPath = AppPaths.ScriptPath;
                 _scriptHost.FontSize = _cfg.FontSize;
                 _scriptHost.TimeFontSize = _cfg.TimeFontSize;
                 _scriptHost.WeatherLat = _cfg.Weather.Lat;
@@ -100,7 +100,7 @@ namespace ConkyWin
                     Log("script.lua 已加载，mode=" + (_scriptHost.FullMode ? "full(conky_rows)" : "enhance(hooks)"));
 
                 // 配置 / 脚本热重载：记录当前修改时间，Update() 中每秒比一次
-                _cfgPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                _cfgPath = AppPaths.ConfigPath;
                 _cfgStamp = FileStamp(_cfgPath);
                 _scriptStamp = FileStamp(_scriptPath);
                 Log("热重载已启用：config.json / script.lua（保存即生效，无需重启）");
@@ -470,7 +470,7 @@ namespace ConkyWin
         {
             try
             {
-                File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log"),
+                File.AppendAllText(AppPaths.LogPath,
                     DateTime.Now.ToString("HH:mm:ss") + " " + msg + Environment.NewLine);
             }
             catch { }
@@ -863,7 +863,7 @@ namespace ConkyWin
             if (string.IsNullOrEmpty(path)) return null;
             try
             {
-                string full = Path.IsPathRooted(path) ? path : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
+                string full = AppPaths.AssetPath(path);
                 if (!File.Exists(full)) return null;
                 var bmp = new System.Windows.Media.Imaging.BitmapImage();
                 bmp.BeginInit();
@@ -1001,14 +1001,14 @@ namespace ConkyWin
 
         private static Config LoadConfig()
         {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            string path = AppPaths.ConfigPath;
             return LoadConfigFile(path, out _);
         }
 
         /// <summary>加载配置并把原文带给脚本宿主（conky.config() 透传，含用户自定义键）。</summary>
         private Config LoadConfigLive()
         {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+            string path = AppPaths.ConfigPath;
             var c = LoadConfigFile(path, out string raw);
             if (c != null) _scriptHost.ConfigJson = raw;
             return c;
