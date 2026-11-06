@@ -61,15 +61,29 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 | 开机自启 | 勾选/取消，自动维护 `HKCU\...\Run` 注册表项（指向当前运行的 exe） |
 | 退出 ConkyWin | 正常退出并清理托盘图标 |
 
-设置窗口五个页签：
+设置窗口六个页签：
 
-- **常规**：定位方式（右对齐 / 绝对坐标）、X/Y、下边界处理、面板宽度、正文/时间字号、粗体、天气城市与经纬度
+- **常规**：水平对齐 / 垂直对齐、X/Y、边缘留白、面板宽度、天气城市与经纬度
 - **配色**：标签色、进度条底色、7 个模块数值色、CPU/MEM/DISK/GPU 渐变两端；带系统取色器与预览色块，透明度前缀会保留
+- **字体**：全局正文字体 / 标签字体 / 时间字体 / 多列字体（下拉直接列出系统已安装字体）及各自字号；下方「分区块覆盖」表格按 `script.lua` 里的 `style` 标记自动生成，每个区块可单独设主字号、标签字号、字体
 - **脚本参数**：`GraphHeight` / `TopProcesses` / `ScaleFloorKb` / `TextColor` / `AccentColor`（Harmattan 脚本的自定义键）
 - **Lua 脚本**：主题 `color` / `mono` 切换、语法检查、保存、恢复内置默认脚本
 - **原始 JSON**：直接编辑完整 `config.json`，任意自定义键都能改，校验通过才应用
 
-**位置怎么摆**：默认「右对齐」贴屏幕右缘，此时 X 会被忽略、输入框呈禁用态；要自由摆放就把「定位方式」改成「绝对坐标」，X/Y 立刻解锁。另外默认开启「自动上移」，面板内容很高时会把 Y 往上顶以保证不超出屏幕 —— 想让 Y 精确生效，把「下边界」改成「不限制」。
+**位置怎么摆**：水平、垂直各有一个对齐下拉，可选 `绝对坐标` / `左对齐` / `水平居中` / `右对齐` 和 `绝对坐标` / `顶部对齐` / `垂直居中` / `底部对齐`。X/Y 永远可填：选「绝对坐标」时是屏幕像素坐标；选对齐方式时变成相对基准的微调偏移（正数向右 / 下，可为负）。从绝对坐标切到对齐方式时窗口会自动把偏移归零，避免旧坐标把面板顶出屏幕。旧配置只有 `RightGap` / `BottomGap`，打开设置窗口时会自动推断出对齐方式，位置不会跳。
+
+**字体与字号怎么改**：全局项是所有区块的默认值，字体下拉列的是本机已安装的字体族，留空表示跟随上一级。想单独调某个区块，在「分区块覆盖」表格里找到它改主字号 / 标签字号 / 字体即可，字号填 `0` 表示跟随全局。表格的区块名是**自动从 `script.lua` 扫描** `style = "xxx"` 得到的 —— 你给脚本里任意一行加上自己的 `style` 名，设置窗口就会自动多出对应的一行，不用改 C#。底层写的是 `config.json` 的 `Styles` 表：
+
+```json
+"Styles": {
+  "weather_city":     { "Size": 30, "LabelSize": 13, "Font": "KaiTi" },
+  "weather_info":     { "Size": 14, "LabelSize": 12 },
+  "weather_forecast": { "CellSize": 22, "CellLabelSize": 12, "CellSubSize": 12 },
+  "graph":            { "LabelSize": 12 }
+}
+```
+
+可用键：`Size` / `LabelSize` / `CellSize` / `CellLabelSize` / `CellSubSize` / `Font` / `LabelFont` / `CellFont`。也可以在脚本的行里直接写 `font_size` / `label_font_size` / `font_family` 等字段，行内显式值优先。
 
 **配色以谁为准**：使用 `script.lua` 时，文字和曲线颜色由脚本顶部的 `C` 表决定（`text` 是数值、`label` 是左侧小标签、`cpu`/`mem`/`disk` 是曲线色）。在「配色」「脚本参数」页改颜色，窗口会同步改写 `C` 表；直接在「Lua 脚本」页改 `C` 表同样立即生效，两条路等价。`config.json` 里的 `LabelColor`/`Cpu.ValueColor` 等只用于删掉脚本后的内置简洁面板。
 
@@ -93,15 +107,24 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 ```jsonc
 {
   "Position": {
-    "X": 1680,                            // 面板位置（RightGap >= 0 时忽略 X）
-    "Y": 360,                             // 面板顶部位置；内容超出屏幕时自动上移，保证面板完整在屏内
-    "RightGap": -1,                       // >= 0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap（0 = 紧贴右缘）
-    "BottomGap": 8                        // 面板底边与工作区底边的最小间距
+    "X": 0,                               // 绝对坐标下的屏幕横坐标；对齐模式下是相对基准的偏移
+    "Y": 0,                               // 绝对坐标下的屏幕纵坐标；对齐模式下是相对基准的偏移
+    "HAlign": "right",                    // absolute / left / center / right（留空 = 旧版 RightGap 语义）
+    "VAlign": "bottom",                   // absolute / top / center / bottom（留空 = 旧版 BottomGap 钳制）
+    "RightGap": 0,                        // 右对齐时距屏幕右缘的留白
+    "BottomGap": 8                        // 底部对齐时距屏幕下缘的留白
   },
   "PanelWidth": 220,                     // 面板固定宽度（px），高度自适应内容
-  "FontSize": 13,                        // 数值字号
+  "FontSize": 13,                        // 全局数值字号
   "TimeFontSize": 15,                    // 时间字号
   "Bold": true,                          // 数值是否加粗
+  "FontFamily": "Consolas",              // 全局正文字体（填系统已安装的字体名）
+  "LabelFontFamily": "Microsoft YaHei UI", // 全局左侧标签字体
+  "LabelFontSize": 11,                   // 全局左侧标签字号
+  "CellFontSize": 20,                    // 多列区块（三天预报）数值字号
+  "CellLabelFontSize": 11,               // 多列区块顶部小字字号
+  "CellSubFontSize": 11,                 // 多列区块底部小字字号
+  "Styles": {},                          // 分区块覆盖，见「字体与字号怎么改」
   "LabelColor": "#7A90AC",               // 左侧标签颜色（CPU/MEM/...）
   "BarBackground": "#26FFFFFF",          // 进度条底色（半透明）
   "Cpu": {

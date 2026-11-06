@@ -87,6 +87,11 @@
                     <StackPanel x:Name="ColorsPanel" Margin="6"/>
                 </ScrollViewer>
             </TabItem>
+            <TabItem Header="字体">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                    <StackPanel x:Name="FontsPanel" Margin="6"/>
+                </ScrollViewer>
+            </TabItem>
             <TabItem Header="脚本参数">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
                     <StackPanel x:Name="ScriptPanel" Margin="6"/>

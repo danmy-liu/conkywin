@@ -1,7 +1,9 @@
 {
   "Position": {
-    "X": 1652,
-    "Y": 300,
+    "X": 0,
+    "Y": 0,
+    "HAlign": "right",
+    "VAlign": "bottom",
     "RightGap": 0,
     "BottomGap": 8
   },
@@ -9,6 +11,13 @@
   "FontSize": 13,
   "TimeFontSize": 15,
   "Bold": true,
+  "FontFamily": "Consolas",
+  "LabelFontFamily": "Microsoft YaHei UI",
+  "LabelFontSize": 11,
+  "CellFontSize": 20,
+  "CellLabelFontSize": 11,
+  "CellSubFontSize": 11,
+  "Styles": {},
   "LabelColor": "#A6BAD1",
   "BarBackground": "#26FFFFFF",
   "Cpu": {

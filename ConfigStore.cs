@@ -194,6 +194,60 @@ namespace ConkyWin
             });
         }
 
+        // ---------- 对齐归一化 / 区块样式扫描 ----------
+
+        private static readonly Regex StyleTag = new Regex(
+            @"style\s*=\s*""([A-Za-z0-9_.\-]+)""", RegexOptions.Compiled);
+        private static readonly Regex LuaBlockComment = new Regex(
+            @"--\[\[.*?\]\]", RegexOptions.Compiled | RegexOptions.Singleline);
+        private static readonly Regex LuaLineComment = new Regex(
+            @"--[^\r\n]*", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 扫描脚本里所有 style = "xxx" 标记，按出现顺序去重。
+        /// 先剥掉 Lua 注释，否则文末示例里写的 style 名会被当成一个不存在的区块。
+        /// </summary>
+        public static List<string> FindStyleTags(string lua)
+        {
+            var found = new List<string>();
+            if (string.IsNullOrEmpty(lua)) return found;
+            string code = LuaLineComment.Replace(LuaBlockComment.Replace(lua, ""), "");
+            foreach (Match m in StyleTag.Matches(code))
+            {
+                string k = m.Groups[1].Value;
+                if (!found.Contains(k)) found.Add(k);
+            }
+            return found;
+        }
+
+        /// <summary>
+        /// 老配置只有 RightGap / BottomGap，设置窗口的对齐下拉无法如实显示实际状态。
+        /// 这里按旧值推断 HAlign / VAlign 并把 X / Y 归一化成偏移，只改内存对象、不写盘。
+        /// 返回 true 表示补写过键；已经是新格式时返回 false（幂等）。
+        /// </summary>
+        public static bool NormalizeAlign(JsonObject root)
+        {
+            if (root == null) return false;
+            bool did = false;
+            if (Get(root, "Position.HAlign") == null)
+            {
+                string rg = Get(root, "Position.RightGap") ?? "-1";
+                bool abs = rg.Trim() == "-1";
+                Set(root, "Position.HAlign", JsonValue.Create(abs ? "absolute" : "right"));
+                if (!abs) Set(root, "Position.X", JsonValue.Create(0));
+                did = true;
+            }
+            if (Get(root, "Position.VAlign") == null)
+            {
+                string bg = Get(root, "Position.BottomGap") ?? "8";
+                bool abs = bg.Trim() == "-1";
+                Set(root, "Position.VAlign", JsonValue.Create(abs ? "absolute" : "bottom"));
+                if (!abs) Set(root, "Position.Y", JsonValue.Create(0));
+                did = true;
+            }
+            return did;
+        }
+
         /// <summary>命令行自测：ConkyWin.exe --selftest，结果写 exe 同目录 selftest.log。</summary>
         public static string SelfTest()
         {
@@ -259,6 +313,36 @@ namespace ConkyWin
                       colored.Length > def.Length - 20, "");
                 check("自定义脚本颜色同步为空操作",
                       SetPalette("local x = 1", pal) == "local x = 1", "");
+
+                // 字体字号：区块标记扫描 + 老配置对齐归一化
+                var tags = FindStyleTags(def);
+                check("识别脚本 style 区块", tags.Contains("weather_city") &&
+                      tags.Contains("weather_info") && tags.Contains("graph"), "");
+                check("style 区块去重", FindStyleTags("style=\"a\" style=\"b\" style=\"a\"").Count == 2, "");
+                check("空脚本无区块", FindStyleTags("").Count == 0, "");
+                check("注释里的示例不算区块", !tags.Contains("my_block"), "");
+                check("剥离行注释后仍识别真实区块",
+                      FindStyleTags("-- style=\"fake\"\r\nstyle = \"real\"").Contains("real") &&
+                      !FindStyleTags("-- style=\"fake\"\r\nstyle = \"real\"").Contains("fake"), "");
+                check("默认脚本含 Styles 注入", def.Contains("cfg.Styles") && def.Contains("DEFAULT_STY"), "");
+
+                JsonObject old = Parse("{\"Position\":{\"X\":1652,\"Y\":300,\"RightGap\":0,\"BottomGap\":8},\"MyKey\":1}");
+                check("老配置归一化对齐", NormalizeAlign(old) &&
+                      Get(old, "Position.HAlign") == "right" && Get(old, "Position.VAlign") == "bottom" &&
+                      Get(old, "Position.X") == "0" && Get(old, "Position.Y") == "0", ToJson(old));
+                check("归一化保留自定义键", Get(old, "MyKey") == "1", "");
+                check("归一化幂等", !NormalizeAlign(old), "");
+                JsonObject absCfg = Parse("{\"Position\":{\"X\":400,\"Y\":120,\"RightGap\":-1,\"BottomGap\":-1}}");
+                NormalizeAlign(absCfg);
+                check("绝对坐标归一化不动 X/Y",
+                      Get(absCfg, "Position.HAlign") == "absolute" && Get(absCfg, "Position.VAlign") == "absolute" &&
+                      Get(absCfg, "Position.X") == "400" && Get(absCfg, "Position.Y") == "120", "");
+                JsonObject styled = Parse("{\"Styles\":{\"weather_city\":{\"Size\":30,\"Font\":\"KaiTi\"}},\"Keep\":9}");
+                Set(styled, "Styles.weather_info.Size", JsonValue.Create(17));
+                check("分区块字号写入", Get(styled, "Styles.weather_city.Size") == "30" &&
+                      Get(styled, "Styles.weather_info.Size") == "17", "");
+                check("分区块写入不丢自定义键", Get(styled, "Keep") == "9" &&
+                      Get(styled, "Styles.weather_city.Font") == "KaiTi", "");
             }
             catch (Exception ex) { check("自测过程无异常", false, ex.ToString()); }
             finally { try { Directory.Delete(dir, true); } catch { } }

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -35,6 +36,7 @@ namespace ConkyWin
 
         private readonly List<Field> _fields = new List<Field>();
         private readonly DispatcherTimer _saveTimer;
+        private readonly string[] _fontNames = SystemFontNames();
         private JsonObject _root;
         private bool _loading;
         private bool _configDirty;
@@ -54,11 +56,12 @@ namespace ConkyWin
             };
             Tabs.SelectionChanged += (s, e) =>
             {
-                if (Tabs.SelectedIndex == 4 && !_rawDirty) RefreshRaw();
+                if (Tabs.SelectedIndex == 5 && !_rawDirty) RefreshRaw();
             };
 
             BuildGeneral();
             BuildColors();
+            BuildFonts();
             BuildScriptParams();
             LoadConfig();
             LoadScript();
@@ -184,6 +187,173 @@ namespace ConkyWin
             });
         }
 
+        /// <summary>枚举系统已安装字体族，供字体下拉使用；读不到时给几个安全兜底。</summary>
+        private static string[] SystemFontNames()
+        {
+            var set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var f in System.Windows.Media.Fonts.SystemFontFamilies)
+                {
+                    string n = f.Source;
+                    if (!string.IsNullOrWhiteSpace(n)) set.Add(n.Trim());
+                }
+            }
+            catch { }
+            if (set.Count == 0)
+            {
+                set.Add("Consolas"); set.Add("Microsoft YaHei UI");
+                set.Add("Segoe UI"); set.Add("Segoe UI Symbol");
+            }
+            var arr = new string[set.Count];
+            set.CopyTo(arr);
+            return arr;
+        }
+
+        private static Action<bool> BorderFlag(Control ctl)
+        {
+            return ok => ctl.BorderBrush = new SolidColorBrush(
+                ok ? Color.FromRgb(0x33, 0x46, 0x5C) : Color.FromRgb(0xE2, 0x4B, 0x4A));
+        }
+
+        private static string ComboTag(ComboBox cb, string def)
+        {
+            var it = cb.SelectedItem as ComboBoxItem;
+            return it != null && it.Tag != null ? it.Tag.ToString() : def;
+        }
+
+        private static void SelectCombo(ComboBox cb, string v, string def)
+        {
+            v = v ?? def;
+            foreach (ComboBoxItem it in cb.Items)
+                if (it.Tag != null && it.Tag.ToString() == v) { cb.SelectedItem = it; return; }
+            var extra = new ComboBoxItem { Content = "自定义 (" + v + ")", Tag = v };
+            cb.Items.Add(extra);
+            cb.SelectedItem = extra;
+        }
+
+        private void FillFontCombo(ComboBox cb)
+        {
+            cb.Items.Add(new ComboBoxItem { Content = "跟随全局", Tag = "" });
+            foreach (string f in _fontNames)
+                cb.Items.Add(new ComboBoxItem { Content = f, Tag = f });
+        }
+
+        /// <summary>字符串值下拉；切换时可用 onValue(新值, 旧值) 联动其它控件。</summary>
+        private Field AddComboText(Panel p, string label, string path, string def,
+                                   Tuple<string, string>[] options, string hint,
+                                   Action<string, string> onValue = null)
+        {
+            var row = NewRow(p);
+            row.Children.Add(NewLabel(label));
+            var cb = new ComboBox
+            {
+                Width = 250, FontSize = 13,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            foreach (var o in options) cb.Items.Add(new ComboBoxItem { Content = o.Item1, Tag = o.Item2 });
+            string prev = def;
+            cb.SelectionChanged += (s, e) =>
+            {
+                if (_loading) return;
+                string v = ComboTag(cb, def);
+                Changed();
+                if (onValue != null) onValue(v, prev);
+                prev = v;
+            };
+            row.Children.Add(cb);
+            row.Children.Add(NewHint(hint));
+            return Register(new Field
+            {
+                Path = path, Kind = Kind.Text, Default = def,
+                Get = () => ComboTag(cb, def),
+                Set = v => { SelectCombo(cb, v, def); prev = v ?? def; }
+            });
+        }
+
+        private Field AddFontCombo(Panel p, string label, string path, string def, string hint)
+        {
+            var row = NewRow(p);
+            row.Children.Add(NewLabel(label));
+            var cb = new ComboBox
+            {
+                Width = 250, FontSize = 13, IsTextSearchEnabled = true,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            FillFontCombo(cb);
+            cb.SelectionChanged += (s, e) => { if (!_loading) Changed(); };
+            row.Children.Add(cb);
+            row.Children.Add(NewHint(hint));
+            return Register(new Field
+            {
+                Path = path, Kind = Kind.Text, Default = def,
+                Get = () => ComboTag(cb, def),
+                Set = v => SelectCombo(cb, v, def),
+                MarkValid = BorderFlag(cb)
+            });
+        }
+
+        /// <summary>
+        /// 一个区块一行：主字号 / 标签字号 / 字体。字号填 0 表示跟随全局，
+        /// 字体选「跟随全局」写空串。三个控件各自注册成 Field，保存时只写改动过的键。
+        /// </summary>
+        private void AddStyleRow(Panel p, string key, string name, double defSize, double defLabel, bool cells)
+        {
+            var row = NewRow(p);
+            row.Children.Add(new TextBlock
+            {
+                Text = name, Width = 168, FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xD8, 0xE6, 0xF5)),
+                VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap
+            });
+            var tbSize = new TextBox
+            {
+                Width = 56, TextAlignment = TextAlignment.Center,
+                ToolTip = "主字号；填 0 = 跟随全局"
+            };
+            var tbLab = new TextBox
+            {
+                Width = 56, Margin = new Thickness(6, 0, 0, 0), TextAlignment = TextAlignment.Center,
+                ToolTip = "左侧标签字号；填 0 = 跟随全局"
+            };
+            var cb = new ComboBox
+            {
+                Width = 190, Margin = new Thickness(8, 0, 0, 0), FontSize = 12,
+                IsTextSearchEnabled = true, VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "该区块使用的字体"
+            };
+            FillFontCombo(cb);
+            tbSize.TextChanged += (s, e) => { if (!_loading) Changed(); };
+            tbLab.TextChanged += (s, e) => { if (!_loading) Changed(); };
+            cb.SelectionChanged += (s, e) => { if (!_loading) Changed(); };
+            row.Children.Add(tbSize);
+            row.Children.Add(tbLab);
+            row.Children.Add(cb);
+
+            string kSize = cells ? "CellSize" : "Size";
+            string kLab = cells ? "CellLabelSize" : "LabelSize";
+            Register(new Field
+            {
+                Path = "Styles." + key + "." + kSize, Kind = Kind.Double,
+                Default = defSize.ToString(CultureInfo.InvariantCulture),
+                Get = () => tbSize.Text.Trim(), Set = v => tbSize.Text = v,
+                MarkValid = BorderFlag(tbSize)
+            });
+            Register(new Field
+            {
+                Path = "Styles." + key + "." + kLab, Kind = Kind.Double,
+                Default = defLabel.ToString(CultureInfo.InvariantCulture),
+                Get = () => tbLab.Text.Trim(), Set = v => tbLab.Text = v,
+                MarkValid = BorderFlag(tbLab)
+            });
+            Register(new Field
+            {
+                Path = "Styles." + key + ".Font", Kind = Kind.Text, Default = "",
+                Get = () => ComboTag(cb, ""), Set = v => SelectCombo(cb, v, ""),
+                MarkValid = BorderFlag(cb)
+            });
+        }
+
         private void AddSlider(Panel p, string label, string path, int def, int min, int max, string hint)
         {
             var row = NewRow(p);
@@ -300,20 +470,27 @@ namespace ConkyWin
         private void BuildGeneral()
         {
             var p = GeneralPanel;
-            AddSection(p, "位置", "默认贴屏幕右缘。想用 X / Y 自由摆放，请把「定位方式」改成绝对坐标；改动约 1 秒后生效。");
-            Field fx = AddNumber(p, "X（像素）", "Position.X", "1652", Kind.Int, "屏幕左侧起算");
-            Field fy = AddNumber(p, "Y（像素）", "Position.Y", "300", Kind.Int, "屏幕顶部起算");
-            AddComboNum(p, "定位方式", "Position.RightGap", 0, new[]
+            AddSection(p, "位置", "X / Y 始终可填：选「绝对坐标」时是屏幕像素坐标；选对齐方式时是相对基准的微调偏移（正数向右 / 下，可为负）。从绝对坐标切到对齐方式时会自动把偏移归零，避免旧坐标把面板顶出屏幕。");
+            Field fx = AddNumber(p, "X（像素）", "Position.X", "1652", Kind.Int, "屏幕横坐标或水平偏移");
+            Field fy = AddNumber(p, "Y（像素）", "Position.Y", "300", Kind.Int, "屏幕纵坐标或垂直偏移");
+            AddComboText(p, "水平对齐", "Position.HAlign", "absolute", new[]
             {
-                Tuple.Create("右对齐（贴屏幕右边，忽略 X）", 0),
-                Tuple.Create("绝对坐标（使用 X / Y）", -1)
-            }, "选绝对坐标后 X / Y 才会生效",
-                v => { bool abs = v < 0; fx.SetEnabled?.Invoke(abs); fy.SetEnabled?.Invoke(abs); });
-            AddComboNum(p, "下边界", "Position.BottomGap", 8, new[]
+                Tuple.Create("绝对坐标（X 即屏幕横坐标）", "absolute"),
+                Tuple.Create("左对齐（贴工作区左缘）", "left"),
+                Tuple.Create("水平居中", "center"),
+                Tuple.Create("右对齐（贴工作区右缘）", "right")
+            }, "选对齐方式后 X 变成相对偏移",
+                (v, old) => { if (v != "absolute" && old == "absolute") fx.Set("0"); });
+            AddComboText(p, "垂直对齐", "Position.VAlign", "absolute", new[]
             {
-                Tuple.Create("自动上移，保证面板完整显示", 8),
-                Tuple.Create("不限制，完全按 Y 摆放", -1)
-            }, "面板很高时「自动上移」会覆盖你填的 Y；想让 Y 精确生效请选「不限制」。其它数值可在原始 JSON 页改。");
+                Tuple.Create("绝对坐标（Y 即屏幕纵坐标）", "absolute"),
+                Tuple.Create("顶部对齐", "top"),
+                Tuple.Create("垂直居中", "center"),
+                Tuple.Create("底部对齐", "bottom")
+            }, "选对齐方式后 Y 变成相对偏移",
+                (v, old) => { if (v != "absolute" && old == "absolute") fy.Set("0"); });
+            AddNumber(p, "右缘留白", "Position.RightGap", "0", Kind.Int, "靠右时距屏幕右边缘的像素");
+            AddNumber(p, "下缘留白", "Position.BottomGap", "8", Kind.Int, "靠下时距屏幕下边缘的像素");
 
             AddSection(p, "字体与尺寸", "改动会在 1 秒后直接反映到桌面面板上。");
             AddSlider(p, "面板宽度", "PanelWidth", 268, 120, 800, "像素");
@@ -350,6 +527,85 @@ namespace ConkyWin
             AddColor(p, "GPU 渐变止", "Gpu.BarEnd", "#7A5CFF", "");
             AddColor(p, "TEMP 数值", "Temp.ValueColor", "#FF6B6B", "");
             AddColor(p, "PROC 数值", "Proc.ValueColor", "#EAF2FC", "");
+        }
+
+        // ---------- 字体与字号：区块名自动从脚本识别 ----------
+
+        private static readonly Dictionary<string, string> StyleNames = new Dictionary<string, string>
+        {
+            { "weather_city", "天气 · 城市名 / 大字温度" },
+            { "weather_desc", "天气 · 天气描述" },
+            { "weather_info", "天气 · 湿度 / 风速 / 气压" },
+            { "weather_forecast", "天气 · 三天预报" },
+            { "weather_error", "天气 · 加载提示" },
+            { "graph", "CPU / 内存 / 磁盘 IO / 网速曲线" },
+            { "disk", "磁盘用量条" },
+            { "total", "累计流量" },
+            { "proc", "进程总数" },
+            { "top", "Top 进程列表" },
+        };
+        private static readonly Dictionary<string, double> StyleSizes = new Dictionary<string, double>
+        {
+            { "weather_city", 26 }, { "weather_desc", 15 }, { "disk", 12 },
+            { "top", 12 }, { "weather_forecast", 20 },
+        };
+        private static readonly Dictionary<string, double> StyleLabelSizes = new Dictionary<string, double>
+        {
+            { "weather_forecast", 11 },
+        };
+        private List<string> DiscoverStyles()
+        {
+            var found = new List<string>();
+            string lua = LuaEditor != null ? LuaEditor.Text : "";
+            if (string.IsNullOrEmpty(lua)) lua = ConfigStore.ReadText(ConfigStore.ScriptPath) ?? "";
+            foreach (string k in ConfigStore.FindStyleTags(lua))
+                if (!found.Contains(k)) found.Add(k);
+            foreach (string k in StyleNames.Keys) if (!found.Contains(k)) found.Add(k);
+            return found;
+        }
+
+        private void BuildFonts()
+        {
+            var p = FontsPanel;
+            AddSection(p, "全局字体与字号", "所有区块的默认值。字体下拉直接列出系统已安装字体；留空表示跟随上一级默认。改动约 1 秒后生效。");
+            AddFontCombo(p, "正文字体", "FontFamily", "Consolas", "数值、时间等主要文字");
+            AddSlider(p, "正文字号", "FontSize", 13, 8, 36, "磅");
+            AddFontCombo(p, "标签字体", "LabelFontFamily", "Microsoft YaHei UI", "左侧小标签：城市名 / 湿度 / CPU…");
+            AddSlider(p, "标签字号", "LabelFontSize", 11, 7, 30, "磅");
+            AddFontCombo(p, "时间字体", "TimeFontFamily", "", "内置简洁面板的时间；留空跟随正文字体");
+            AddSlider(p, "时间字号", "TimeFontSize", 15, 8, 40, "磅");
+            AddFontCombo(p, "多列字体", "CellFontFamily", "", "三天预报数值；留空用天气符号字体");
+            AddSlider(p, "多列数值字号", "CellFontSize", 20, 8, 40, "磅");
+            AddSlider(p, "多列小字字号", "CellSubFontSize", 11, 7, 30, "磅");
+            AddSlider(p, "多列标题字号", "CellLabelFontSize", 11, 7, 30, "磅");
+
+            AddSection(p, "分区块覆盖", "区块名自动从 script.lua 识别：在脚本里给行加 style = \"xxx\"，这里就会多出一行。主字号 / 标签字号填 0 = 跟随全局。改完约 1 秒生效，不用动脚本。");
+            var head = NewRow(p);
+            head.Children.Add(NewLabel("区块"));
+            head.Children.Add(new TextBlock
+            {
+                Text = "主字号", Width = 56, FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
+            });
+            head.Children.Add(new TextBlock
+            {
+                Text = "标签字号", Width = 56, Margin = new Thickness(6, 0, 0, 0), FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
+            });
+            head.Children.Add(new TextBlock
+            {
+                Text = "字体（跟随全局 = 空）", Margin = new Thickness(8, 0, 0, 0), FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x7E, 0x93, 0xAB))
+            });
+            foreach (string key in DiscoverStyles())
+            {
+                string name;
+                if (!StyleNames.TryGetValue(key, out name)) name = key;
+                double ds, dl;
+                if (!StyleSizes.TryGetValue(key, out ds)) ds = 0;
+                if (!StyleLabelSizes.TryGetValue(key, out dl)) dl = 0;
+                AddStyleRow(p, key, name, ds, dl, key == "weather_forecast");
+            }
         }
 
         private void BuildScriptParams()
@@ -434,9 +690,20 @@ namespace ConkyWin
                 _root = ConfigStore.Parse(ConfigStore.DefaultConfig);
             }
             if (_root == null) _root = new JsonObject();
+            NormalizeAlign();
             BindFields();
             RefreshRaw();
             StatusText.Text = "已载入 " + Path.GetFileName(ConfigStore.ConfigPath);
+        }
+
+        /// <summary>
+        /// 老配置只有 RightGap / BottomGap，对齐下拉无法如实显示实际状态。
+        /// 这里按旧值推断 HAlign / VAlign 填进内存里的 _root（不立即写盘），
+        /// 同时把 X / Y 归一化成偏移，保证第一次改动时面板不会突然跳到屏幕外。
+        /// </summary>
+        private void NormalizeAlign()
+        {
+            ConfigStore.NormalizeAlign(_root);
         }
 
         private void BindFields()

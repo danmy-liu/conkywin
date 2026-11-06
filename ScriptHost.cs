@@ -88,6 +88,11 @@ namespace ConkyWin
             public string GraphColor;   // null → 用 Color
             public bool Hr;             // true → 该行渲染为分隔横线
             public double? FontSize;    // null → 用全局字号
+            public double? LabelFontSize;   // null → 用全局标签字号
+            public string FontFamily;       // null → 用全局正文字体
+            public string LabelFontFamily;  // null → 用全局标签字体
+            public double? CellFontSize, CellLabelFontSize, CellSubFontSize;
+            public string CellFontFamily;
             public double Gap;          // > 0 → 该行为空白间隔（px）
             public List<RowCell> Cells; // 非 null → 该行为多列布局（如三天预报）
         }
@@ -406,6 +411,17 @@ namespace ConkyWin
                     if (hr.Type == DataType.Boolean && hr.Boolean) r.Hr = true;
                     var fs = t.Get("font_size");
                     if (fs.Type == DataType.Number) r.FontSize = fs.Number;
+                    var lfs = t.Get("label_font_size");
+                    if (lfs.Type == DataType.Number) r.LabelFontSize = lfs.Number;
+                    var cfs = t.Get("cell_font_size");
+                    if (cfs.Type == DataType.Number) r.CellFontSize = cfs.Number;
+                    var clfs = t.Get("cell_label_font_size");
+                    if (clfs.Type == DataType.Number) r.CellLabelFontSize = clfs.Number;
+                    var csfs = t.Get("cell_sub_font_size");
+                    if (csfs.Type == DataType.Number) r.CellSubFontSize = csfs.Number;
+                    r.FontFamily = GetOptStr(t.Get("font_family"));
+                    r.LabelFontFamily = GetOptStr(t.Get("label_font_family"));
+                    r.CellFontFamily = GetOptStr(t.Get("cell_font_family"));
                     var icon = t.Get("icon");
                     if (icon.Type == DataType.String) r.Icon = icon.String;
                     var isz = t.Get("icon_size");

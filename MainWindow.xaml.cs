@@ -611,8 +611,8 @@ namespace ConkyWin
                     var l = new TextBlock
                     {
                         Text = c.Label,
-                        FontFamily = new FontFamily("Microsoft YaHei UI"),
-                        FontSize = 11,
+                        FontFamily = LabelFF(r.LabelFontFamily),
+                        FontSize = r.CellLabelFontSize ?? _cfg.CellLabelFontSize,
                         Foreground = Brush(r.LabelColor ?? _cfg.LabelColor),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 2)
@@ -620,8 +620,8 @@ namespace ConkyWin
                     var v = new TextBlock
                     {
                         Text = c.Text,
-                        FontFamily = new FontFamily("Segoe UI Symbol, Segoe UI Emoji, Microsoft YaHei UI"),
-                        FontSize = 20,
+                        FontFamily = CellFF(r.CellFontFamily),
+                        FontSize = r.CellFontSize ?? _cfg.CellFontSize,
                         Foreground = Brush(c.Color ?? "#F2F7FF"),
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Margin = new Thickness(0, 0, 0, 2)
@@ -646,8 +646,8 @@ namespace ConkyWin
                     var s = new TextBlock
                     {
                         Text = c.Sub,
-                        FontFamily = new FontFamily("Consolas"),
-                        FontSize = 11,
+                        FontFamily = CellFF(r.CellFontFamily),
+                        FontSize = r.CellSubFontSize ?? _cfg.CellSubFontSize,
                         Foreground = Brush(c.Color ?? "#F2F7FF"),
                         HorizontalAlignment = HorizontalAlignment.Center
                     };
@@ -682,15 +682,15 @@ namespace ConkyWin
                 var label = new TextBlock
                 {
                     Text = r.Label,
-                    FontFamily = new FontFamily("Microsoft YaHei UI"),
-                    FontSize = 11,
+                    FontFamily = LabelFF(r.LabelFontFamily),
+                    FontSize = r.LabelFontSize ?? _cfg.LabelFontSize,
                     Foreground = Brush(r.LabelColor ?? _cfg.LabelColor),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 var value = new TextBlock
                 {
                     Text = r.Text,
-                    FontFamily = new FontFamily("Consolas"),
+                    FontFamily = ValueFF(r.FontFamily),
                     FontSize = r.FontSize ?? _cfg.FontSize,
                     FontWeight = _cfg.Bold ? FontWeights.Bold : FontWeights.Normal,
                     Foreground = Brush(r.Color ?? "#F2F7FF"),
@@ -774,6 +774,12 @@ namespace ConkyWin
                     dr.CellLabels[i].Text = c.Label;
                     dr.CellTexts[i].Text = c.Text;
                     dr.CellSubs[i].Text = c.Sub;
+                    dr.CellLabels[i].FontFamily = LabelFF(r.LabelFontFamily);
+                    dr.CellLabels[i].FontSize = r.CellLabelFontSize ?? _cfg.CellLabelFontSize;
+                    dr.CellTexts[i].FontFamily = CellFF(r.CellFontFamily);
+                    dr.CellTexts[i].FontSize = r.CellFontSize ?? _cfg.CellFontSize;
+                    dr.CellSubs[i].FontFamily = CellFF(r.CellFontFamily);
+                    dr.CellSubs[i].FontSize = r.CellSubFontSize ?? _cfg.CellSubFontSize;
                     var brush = Brush(c.Color ?? "#F2F7FF");
                     dr.CellTexts[i].Foreground = brush;
                     dr.CellSubs[i].Foreground = brush;
@@ -792,7 +798,10 @@ namespace ConkyWin
             dr.LabelColorStr = r.LabelColor;
             dr.Label.Foreground = Brush(r.LabelColor ?? _cfg.LabelColor);
             dr.Value.Foreground = Brush(r.Color ?? "#F2F7FF");
-            if (r.FontSize.HasValue) dr.Value.FontSize = r.FontSize.Value;
+            dr.Label.FontFamily = LabelFF(r.LabelFontFamily);
+            dr.Label.FontSize = r.LabelFontSize ?? _cfg.LabelFontSize;
+            dr.Value.FontFamily = ValueFF(r.FontFamily);
+            dr.Value.FontSize = r.FontSize ?? _cfg.FontSize;
             if (dr.ValueIcon != null && r.Icon != null)
             {
                 dr.ValueIcon.Width = dr.ValueIcon.Height = r.IconSize;
@@ -874,10 +883,23 @@ namespace ConkyWin
                 if (dr.IsHr || dr.IsGap) continue;
                 if (dr.IsColumns)
                 {
-                    foreach (var l in dr.CellLabels) if (l != null) l.Foreground = Brush(dr.LabelColorStr ?? c.LabelColor);
+                    foreach (var l in dr.CellLabels)
+                        if (l != null)
+                        {
+                            l.Foreground = Brush(dr.LabelColorStr ?? c.LabelColor);
+                            l.FontFamily = LabelFF(null);
+                            l.FontSize = c.CellLabelFontSize;
+                        }
+                    foreach (var t in dr.CellTexts)
+                        if (t != null) { t.FontFamily = CellFF(null); t.FontSize = c.CellFontSize; }
+                    foreach (var s in dr.CellSubs)
+                        if (s != null) { s.FontFamily = CellFF(null); s.FontSize = c.CellSubFontSize; }
                     continue;
                 }
                 dr.Label.Foreground = Brush(dr.LabelColorStr ?? c.LabelColor);
+                dr.Label.FontFamily = LabelFF(null);
+                dr.Label.FontSize = c.LabelFontSize;
+                dr.Value.FontFamily = ValueFF(null);
                 dr.Value.FontSize = c.FontSize;
                 dr.Value.FontWeight = c.Bold ? FontWeights.Bold : FontWeights.Normal;
                 if (dr.BarBg != null) dr.BarBg.Background = Brush(c.BarBackground);
@@ -890,25 +912,57 @@ namespace ConkyWin
         /// 不用 HWND_BOTTOM 硬压底——它有概率把窗口压到壁纸层之下（实测偶发，表现为面板完全不可见）。
         /// 位置同时做屏幕内钳制：内容高度变化（天气加载、行数变化）后不会超出工作区下边界。
         /// </summary>
-        /// <summary>右对齐模式下根据面板宽度和 RightGap 计算 X，否则用配置 X。</summary>
+        /// <summary>
+        /// 水平定位：HAlign 决定基准（left / center / right），X 是相对基准的偏移（可为负）。
+        /// 空值 = 旧配置，完全沿用 RightGap 语义；"absolute" = X 就是屏幕横坐标。
+        /// </summary>
         private int TargetX()
         {
-            if (_cfg.Position.RightGap >= 0)
-                return (int)(SystemParameters.WorkArea.Right - ActualWidth - _cfg.Position.RightGap);
-            return _cfg.Position.X;
+            double waLeft = SystemParameters.WorkArea.Left;
+            double waRight = SystemParameters.WorkArea.Right;
+            double w = ActualWidth > 10 ? ActualWidth : _cfg.PanelWidth;
+            string h = (_cfg.Position.HAlign ?? "").Trim().ToLowerInvariant();
+            if (h.Length == 0) // 兼容旧配置
+                return _cfg.Position.RightGap >= 0
+                    ? (int)(waRight - w - _cfg.Position.RightGap)
+                    : _cfg.Position.X;
+            if (h == "absolute") return _cfg.Position.X;
+            double x;
+            switch (h)
+            {
+                case "center": x = waLeft + (waRight - waLeft - w) / 2; break;
+                case "right": x = waRight - w - Math.Max(0, _cfg.Position.RightGap); break;
+                default: x = waLeft; break;              // top / left
+            }
+            return (int)Math.Round(x + _cfg.Position.X);
         }
 
-        /// <summary>按配置 Y 定位，但保证面板完整落在工作区内（底部留 BottomGap 像素）。</summary>
+        /// <summary>
+        /// 垂直定位：VAlign 决定基准（top / center / bottom），Y 是相对基准的偏移（可为负）。
+        /// 空值 = 旧配置，按 Y 摆放并在超高时上移；"absolute" = 完全按 Y，不钳制。
+        /// </summary>
         private int TargetY()
         {
-            int y = _cfg.Position.Y;
-            double waBottom = SystemParameters.WorkArea.Bottom;
             double waTop = SystemParameters.WorkArea.Top;
+            double waBottom = SystemParameters.WorkArea.Bottom;
             double h = ActualHeight > 10 ? ActualHeight : 0;
-            // BottomGap < 0 表示「不限制」：完全按配置的 Y 摆放，允许面板超出屏幕下边缘
-            if (_cfg.Position.BottomGap >= 0 && h > 10 && y + h > waBottom - _cfg.Position.BottomGap)
-                y = (int)Math.Max(waTop, waBottom - _cfg.Position.BottomGap - h);
-            return y;
+            string v = (_cfg.Position.VAlign ?? "").Trim().ToLowerInvariant();
+            if (v.Length == 0) // 兼容旧配置
+            {
+                int y = _cfg.Position.Y;
+                if (_cfg.Position.BottomGap >= 0 && h > 10 && y + h > waBottom - _cfg.Position.BottomGap)
+                    y = (int)Math.Max(waTop, waBottom - _cfg.Position.BottomGap - h);
+                return y;
+            }
+            if (v == "absolute") return _cfg.Position.Y;
+            double baseY;
+            switch (v)
+            {
+                case "center": baseY = waTop + (waBottom - waTop - h) / 2; break;
+                case "bottom": baseY = waBottom - h - Math.Max(0, _cfg.Position.BottomGap); break;
+                default: baseY = waTop; break;           // top
+            }
+            return (int)Math.Round(baseY + _cfg.Position.Y);
         }
 
         private void PlaceWindow()
@@ -990,8 +1044,15 @@ namespace ConkyWin
                     PinWidth();
                 }
                 TimeVal.FontSize = c.TimeFontSize;
+                TimeVal.FontFamily = FF(c.TimeFontFamily, c.FontFamily);
+                var ffVal = FF(c.FontFamily, "Consolas");
+                var ffLabel = FF(c.LabelFontFamily, "Microsoft YaHei UI");
                 foreach (var tb in new[] { CpuVal, MemVal, DiskVal, NetVal, GpuVal, TempVal, ProcVal })
-                    tb.FontSize = c.FontSize;
+                { tb.FontSize = c.FontSize; tb.FontFamily = ffVal; }
+                foreach (var l in new[] { LabelCpu, LabelMem, LabelDisk, LabelNet, LabelGpu, LabelTemp, LabelProc })
+                { l.FontSize = c.LabelFontSize; l.FontFamily = ffLabel; }
+                SysTitle.FontSize = c.LabelFontSize;
+                SysTitle.FontFamily = ffVal;
                 var bold = c.Bold ? FontWeights.Bold : FontWeights.Normal;
                 foreach (var tb in new[] { CpuVal, MemVal, DiskVal, NetVal, GpuVal, TempVal, ProcVal, TimeVal })
                     tb.FontWeight = bold;
@@ -1037,6 +1098,26 @@ namespace ConkyWin
             catch { return Brushes.White; }
         }
 
+        /// <summary>安全构造字体：用户填了不存在的字体名时回退，不让整个面板崩掉。</summary>
+        private static FontFamily FF(string name, string fallback)
+        {
+            string s = string.IsNullOrWhiteSpace(name) ? fallback : name.Trim();
+            if (string.IsNullOrWhiteSpace(s)) s = "Segoe UI";
+            try { return new FontFamily(s); }
+            catch { return new FontFamily("Segoe UI"); }
+        }
+
+        // 行级样式 > 全局配置 > 内置默认。脚本按区块注入这些字段，设置窗口只改 config.json。
+        private FontFamily ValueFF(string rowVal) { return FF(rowVal, _cfg.FontFamily); }
+        private FontFamily LabelFF(string rowVal) { return FF(rowVal, _cfg.LabelFontFamily); }
+        private FontFamily CellFF(string rowVal)
+        {
+            string s = !string.IsNullOrWhiteSpace(rowVal) ? rowVal
+                     : !string.IsNullOrWhiteSpace(_cfg.CellFontFamily) ? _cfg.CellFontFamily
+                     : "Segoe UI Symbol, Segoe UI Emoji, Microsoft YaHei UI";
+            return FF(s, "Segoe UI");
+        }
+
         private static LinearGradientBrush Gradient(string c1, string c2)
         {
             try
@@ -1056,6 +1137,15 @@ namespace ConkyWin
             public int FontSize { get; set; } = 13;
             public int TimeFontSize { get; set; } = 15;
             public bool Bold { get; set; } = true;
+            /// <summary>全局字体。空串表示回退到内置默认（Consolas / Microsoft YaHei UI）。</summary>
+            public string FontFamily { get; set; } = "Consolas";
+            public string LabelFontFamily { get; set; } = "Microsoft YaHei UI";
+            public string TimeFontFamily { get; set; } = "";   // 空 = 跟随 FontFamily
+            public string CellFontFamily { get; set; } = "";   // 空 = 跟随 FontFamily
+            public double LabelFontSize { get; set; } = 11;
+            public double CellFontSize { get; set; } = 20;
+            public double CellLabelFontSize { get; set; } = 11;
+            public double CellSubFontSize { get; set; } = 11;
             public string LabelColor { get; set; } = "#7A90AC";
             public string BarBackground { get; set; } = "#26FFFFFF";
             public Item Cpu { get; set; } = new Item("#4DE3E0", "#4DE3E0", "#2F9EFF");
@@ -1081,9 +1171,16 @@ namespace ConkyWin
         {
             public int X { get; set; } = 1680;
             public int Y { get; set; } = 360;
-            /// <summary>>=0 时右对齐：X = 屏幕右缘 - 面板宽 - RightGap；-1 表示禁用，直接用 X。</summary>
+            /// <summary>
+            /// 水平对齐基准："" = 旧配置（由 RightGap 决定）、"absolute" = X 即屏幕横坐标、
+            /// "left" / "center" / "right" = 以工作区左缘 / 中线 / 右缘为基准，X 作为偏移。
+            /// </summary>
+            public string HAlign { get; set; } = "";
+            /// <summary>垂直对齐基准："" = 旧配置、"absolute" / "top" / "center" / "bottom"。</summary>
+            public string VAlign { get; set; } = "";
+            /// <summary>>=0 时右对齐（旧配置）；新配置下作为右对齐 / 底部对齐的边缘留白。</summary>
             public int RightGap { get; set; } = -1;
-            /// <summary>面板底边与工作区底边的最小间距（内容超高时面板自动上移，保证不出屏）。</summary>
+            /// <summary>面板底边与工作区底边的最小间距。</summary>
             public int BottomGap { get; set; } = 8;
         }
 
