@@ -43,6 +43,7 @@ namespace ConkyWin
         // 编辑器"写临时文件再改名"的保存方式不会触发 Changed 事件）
         private string _cfgPath, _scriptPath;
         private DateTime _cfgStamp, _scriptStamp;
+        private TrayController _tray;
 
         // 内置面板的控件缓存：完整脚本模式会清空 RootPanel，退出脚本模式时要还原
         private List<UIElement> _builtinChildren;
@@ -103,6 +104,10 @@ namespace ConkyWin
                 _cfgStamp = FileStamp(_cfgPath);
                 _scriptStamp = FileStamp(_scriptPath);
                 Log("热重载已启用：config.json / script.lua（保存即生效，无需重启）");
+
+                // 托盘入口：主面板点击穿透，设置/重载/自启/退出都从这里走
+                try { _tray = new TrayController(this); }
+                catch (Exception tex) { Log("托盘初始化失败: " + tex); }
             }
             catch { }
 
@@ -129,10 +134,29 @@ namespace ConkyWin
         {
             _timer?.Stop();
             _posTimer?.Stop();
+            try { _tray?.Dispose(); } catch { }
             try { _cpuCounter?.Dispose(); } catch { }
             try { _procCounter?.Dispose(); } catch { }
             try { _diskIoCounter?.Dispose(); } catch { }
         }
+
+        /// <summary>托盘菜单「重新加载」：不等 mtime 变化，立刻重读配置与脚本。</summary>
+        public void ForceReload()
+        {
+            try
+            {
+                var c = LoadConfigLive();
+                if (c != null) { _cfg = c; ApplyConfig(c); PlaceWindow(); }
+                _cfgStamp = FileStamp(_cfgPath);
+                ReloadScript();
+                _scriptStamp = FileStamp(_scriptPath);
+                Log("托盘菜单：已重新加载配置与脚本");
+            }
+            catch (Exception ex) { Log("强制重载失败: " + ex); }
+        }
+
+        /// <summary>给托盘等非窗口类写日志用。</summary>
+        internal static void LogStatic(string msg) { Log(msg); }
 
         // ---------- 热重载（配置 / 脚本） ----------
 

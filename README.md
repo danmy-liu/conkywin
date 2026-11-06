@@ -43,13 +43,41 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
    - Gitee：[gitee.com/danmyleo/conkywin/releases](https://gitee.com/danmyleo/conkywin/releases)
    - GitHub：[github.com/danmy-liu/conkywin/releases](https://github.com/danmy-liu/conkywin/releases)
 2. 解压到任意目录（建议固定位置，如 `D:\Tools\ConkyWin`——开机自启要用这个路径）
-3. 双击 `ConkyWin.exe`，面板出现在屏幕右侧
-4. 想改样式就编辑同目录的 `config.json` / `script.lua`，**保存即生效**，不用重启
-5. 不想要脚本版面板：删除 `script.lua`，立刻回到内置简洁面板（7 行，带进度条）
+3. 双击 `ConkyWin.exe`，面板出现在屏幕右侧，托盘区出现 ConkyWin 图标
+4. **双击托盘图标**打开可视化设置窗口，改样式所见即所得；也可以直接编辑 `config.json` / `script.lua`，保存即生效
+5. 不想要脚本版面板：在设置窗口的「Lua 脚本」页清空内容，或删除 `script.lua`，立刻回到内置简洁面板（7 行，带进度条）
+
+## 图形化设置（推荐）
+
+托盘图标是主程序唯一的交互入口 —— 主面板点击穿透、不进任务栏，本身点不到。Windows 11 可能把图标收在托盘的「^」里，点开就能看到。
+
+**双击图标**打开设置窗口；**右键**是菜单：
+
+| 菜单项 | 作用 |
+|---|---|
+| 打开设置 | 打开可视化配置窗口 |
+| 重新加载配置与脚本 | 不等轮询，立刻重读 `config.json` / `script.lua` |
+| 打开配置文件夹 | 在资源管理器里定位 `config.json` |
+| 开机自启 | 勾选/取消，自动维护 `HKCU\...\Run` 注册表项（指向当前运行的 exe） |
+| 退出 ConkyWin | 正常退出并清理托盘图标 |
+
+设置窗口五个页签：
+
+- **常规**：X/Y、RightGap/BottomGap、面板宽度、正文/时间字号、粗体、天气城市与经纬度
+- **配色**：标签色、进度条底色、7 个模块数值色、CPU/MEM/DISK/GPU 渐变两端；带系统取色器与预览色块，透明度前缀会保留
+- **脚本参数**：`GraphHeight` / `TopProcesses` / `ScaleFloorKb` / `TextColor` / `AccentColor`（Harmattan 脚本的自定义键）
+- **Lua 脚本**：主题 `color` / `mono` 切换、语法检查、保存、恢复内置默认脚本
+- **原始 JSON**：直接编辑完整 `config.json`，任意自定义键都能改，校验通过才应用
+
+改动在停止操作 700ms 后自动保存，约 1 秒后面板生效；也可以点「保存并应用」立刻写盘。写盘走临时文件 + 原子替换，不会让每秒轮询读到半个 JSON。首次保存会生成 `config.json.bak`，「原始 JSON」页可一键还原。**未知键一律原样保留**，你自己加进 config.json 的自定义键不会被控件删掉。
+
+> 设置窗口开着的时候，如果又在外部编辑器改了 `config.json`，请先点「重新载入」或关掉窗口重开 —— 窗口保存时以它自己载入的那份内容为准。
+
+给桌面快捷方式加 `--settings` 参数，可以只打开设置窗口而不启动面板：`ConkyWin.exe --settings`。开发自测用 `ConkyWin.exe --selftest`，会在 exe 同目录写 `selftest.log`。
 
 ### 开机自启（可选）
 
-在注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下新建字符串值：
+最简单的做法是勾托盘菜单里的「开机自启」。想手工设置也行，在注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下新建字符串值：
 
 ```
 名称：ConkyWin

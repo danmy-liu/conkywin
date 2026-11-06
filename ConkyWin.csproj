@@ -3,6 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>assets\conkywin.ico</ApplicationIcon>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>ConkyWin</AssemblyName>
@@ -19,5 +21,10 @@
   <ItemGroup>
     <!-- 天气图标等资源：编译时复制到输出目录，Lua 脚本按相对路径引用 -->
     <None Include="assets\**\*" CopyToOutputDirectory="PreserveNewest" Link="assets\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 配置窗口「恢复默认」用的内置模板（编译进 exe，发行包无需额外文件） -->
+    <EmbeddedResource Include="config.example.json" LogicalName="ConkyWin.Defaults.config.json" />
+    <EmbeddedResource Include="script.harmattan.lua" LogicalName="ConkyWin.Defaults.script.lua" />
   </ItemGroup>
 </Project>

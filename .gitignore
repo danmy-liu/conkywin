@@ -31,3 +31,10 @@ autostart_check.txt
 
 ## 发行包产物
 dist/
+out-test/
+
+## 配置窗口运行时生成的临时/备份文件与自测日志
+config.json.bak
+config.json.tmp
+script.lua.tmp
+selftest.log
