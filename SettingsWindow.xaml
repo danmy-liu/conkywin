@@ -253,6 +253,9 @@
             <DockPanel>
                 <TextBlock x:Name="StatusText" Text="就绪" Foreground="{DynamicResource UiTextSub}"
                            DockPanel.Dock="Left" VerticalAlignment="Center"/>
+                <TextBlock Text="© 2026 Danmy Liu · 非商业使用" FontSize="10.5"
+                           Foreground="{DynamicResource UiTextSub}" Margin="16,0,0,0"
+                           DockPanel.Dock="Left" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" DockPanel.Dock="Right">
                     <Button x:Name="BtnOpenFolder" Content="打开所在文件夹" Click="OnOpenFolder"/>
                     <Button x:Name="BtnRestoreDefault" Content="恢复默认配置" Margin="8,0,0,0" Click="OnRestoreDefault"/>

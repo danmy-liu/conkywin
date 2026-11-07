@@ -1,6 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 using System.Windows;
 using WF = System.Windows.Forms;
@@ -56,6 +60,11 @@ namespace ConkyWin
                 };
                 auto.CheckedChanged += (s, e) => SetAutoStart(auto.Checked);
                 menu.Items.Add(auto);
+
+                // 只检查 + 提示，不自动下载或替换 exe（详见 README「关于自动更新」）
+                var update = new WF.ToolStripMenuItem("检查更新");
+                update.Click += async (s, e) => await CheckUpdateAsync();
+                menu.Items.Add(update);
 
                 menu.Items.Add(new WF.ToolStripSeparator());
 
@@ -163,6 +172,76 @@ namespace ConkyWin
                 }
             }
             catch (Exception ex) { MainWindow.LogStatic("设置开机自启失败: " + ex); }
+        }
+
+        private const string GithubLatestApi = "https://api.github.com/repos/danmy-liu/conkywin/releases/latest";
+        private const string GiteeReleasesApi = "https://gitee.com/api/v5/repos/danmyleo/conkywin/releases?per_page=1";
+        private const string DownloadPage = "https://gitee.com/danmyleo/conkywin/releases";
+
+        private static Version CurrentVersion()
+        {
+            try
+            {
+                Version v = Assembly.GetExecutingAssembly().GetName().Version;
+                return new Version(v.Major, v.Minor, Math.Max(0, v.Build));
+            }
+            catch { return new Version(0, 0, 0); }
+        }
+
+        /// <summary>只读取最新 Release 的 tag_name，不做任何下载 / 校验 / 替换。</summary>
+        private static async Task<string> LatestTagAsync()
+        {
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) })
+            {
+                http.DefaultRequestHeaders.UserAgent.ParseAdd("ConkyWin/" + CurrentVersion());
+                foreach (string url in new[] { GithubLatestApi, GiteeReleasesApi })
+                {
+                    try
+                    {
+                        string body = await http.GetStringAsync(url).ConfigureAwait(false);
+                        using (JsonDocument doc = JsonDocument.Parse(body))
+                        {
+                            JsonElement root = doc.RootElement;
+                            if (root.ValueKind == JsonValueKind.Array)   // Gitee 返回数组
+                            {
+                                if (root.GetArrayLength() == 0) continue;
+                                root = root[0];
+                            }
+                            if (root.TryGetProperty("tag_name", out JsonElement tag)) return tag.GetString();
+                        }
+                    }
+                    catch { } // 单侧接口不通就换下一个
+                }
+            }
+            return null;
+        }
+
+        private static async Task CheckUpdateAsync()
+        {
+            string tag = await LatestTagAsync();
+            Version cur = CurrentVersion();
+            string curText = "v" + cur.ToString(3);
+            if (tag == null)
+            {
+                WF.MessageBox.Show("暂时无法检查更新（网络不可用或接口异常）。\n\n可稍后重试，或到 Gitee / GitHub 的 Releases 页面查看。",
+                    "ConkyWin · 检查更新", WF.MessageBoxButtons.OK, WF.MessageBoxIcon.Information);
+                return;
+            }
+            bool newer = Version.TryParse(tag.TrimStart('v', 'V'), out Version latest) && latest > cur;
+            if (!newer)
+            {
+                WF.MessageBox.Show("当前已是最新版本 " + curText + "。",
+                    "ConkyWin · 检查更新", WF.MessageBoxButtons.OK, WF.MessageBoxIcon.Information);
+                return;
+            }
+            var r = WF.MessageBox.Show(
+                "发现新版本 " + tag + "（当前 " + curText + "）。\n\n是否打开发布页下载？",
+                "ConkyWin · 检查更新", WF.MessageBoxButtons.YesNo, WF.MessageBoxIcon.Information);
+            if (r == WF.DialogResult.Yes)
+            {
+                try { Process.Start(new ProcessStartInfo(DownloadPage) { UseShellExecute = true }); }
+                catch { }
+            }
         }
 
         public void Dispose()

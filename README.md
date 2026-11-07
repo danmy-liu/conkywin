@@ -2,7 +2,7 @@
 
 Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控挂件。背景 100% 透明、数据直接悬浮在桌面上，**嵌入桌面层**（不置顶、不挡鼠标、不抢焦点），支持开机自启。
 
-纯 C# / WPF 实现，零第三方监控软件依赖（不需要 Rainmeter、LiteMonitor 等），单文件运行，体积小。
+纯 C# / WPF 实现，零第三方监控软件依赖（不需要 Rainmeter、LiteMonitor 等），单文件运行；发行包约 63 MB 是因为自带 .NET 8 运行时，框架依赖编译版仅约 1 MB。
 
 ![ConkyWin 桌面面板实机效果](docs/screenshot.png)
 
@@ -88,7 +88,10 @@ Windows 版 [Conky](https://github.com/brndnmtthws/conky) 式桌面系统监控�
 | 重新加载配置与脚本   | 不等轮询，立刻重读 `config.json` / `script.lua`      |
 | 打开配置文件夹     | 在资源管理器里定位 `config.json`                     |
 | 开机自启        | 勾选/取消，自动维护 `HKCU\...\Run` 注册表项（指向当前运行的 exe） |
+| 检查更新        | 查询 Gitee / GitHub 最新 Release 版本号，有新版本时提示并打开发布页（不会自动下载或安装） |
 | 退出 ConkyWin | 正常退出并清理托盘图标                                 |
+
+同一时间只会运行一个桌面面板：重复双击 `ConkyWin.exe` 时第二个进程会静默退出，不会叠出两个透明面板。`--settings`（只开设置窗口）和 `--selftest`（自测）不受此限制。
 
 设置窗口六个页签，右上角「外观」下拉可切换 **浅色 / 深色 / 跟随系统**，默认浅色；选法写进 `config.json` 的 `UiTheme`，下次打开还记得。这只影响设置窗口，桌面面板本身是透明的、颜色由脚本 `C` 表决定。深色主题实机效果见 [settings-dark.png](docs/settings-dark.png)。
 
@@ -338,6 +341,18 @@ git push --follow-tags        # 有 github 远程时同步推送
 
 Gitee 侧不支持这种自动构建，需要本地跑一次 `build-release.ps1` 再手动上传两个附件（安装包放前面，作为推荐下载项）。
 
+## 关于自动更新
+
+**目前不做自动下载 / 自动安装**，只提供托盘菜单「检查更新」：点一下去 Gitee / GitHub 查最新 Release 的 tag，发现新版本弹提示并打开发布页，下载与安装仍由你决定。
+
+原因：
+
+- 发行包是 64 MB 自包含单文件，安装版由 Inno Setup 管理。自动替换要处理运行中的进程、升级安装、快捷方式、用户配置保留和失败回滚，本身就是一个独立子系统。
+- 项目没有代码签名证书。自动下载并执行的 exe 会被 SmartScreen 拦截，缺少签名校验也等于把供应链风险转嫁给用户。
+- 个人桌面美化工具的版本节奏慢，手动更新成本很低；常驻网络轮询和后台提权反而更打扰人。
+
+将来若确实要做全自动更新，最小可行方案是：只下载 zip 到临时目录 → 校验随 Release 附上的 SHA256 → 提示用户确认 → 调用 `setup.exe /VERYSILENT` 升级安装到原目录（由 Inno Setup 负责覆盖程序文件与保留配置）→ 重启程序。在这些前提具备之前，不会引入自动更新。
+
 ## 已知限制
 
 - **CPU 温度**：普通权限下 Windows 没有可用的读取通道（WMI `MSAcpi_ThermalZoneTemperature` 拒绝访问；真实温度需要 Ring0 内核驱动 + 管理员权限，而管理员权限会破坏本程序依赖的桌面嵌入机制）。TEMP 行因此固定显示 `--℃`。GPU 温度通过 `nvidia-smi`（普通权限可读）正常显示。
@@ -371,4 +386,17 @@ ConkyWin 借了不少现成的轮子与素材，在此一并致谢：
 
 ## License
 
-[MIT](LICENSE)
+自 **v1.2.0** 起，ConkyWin 采用 [PolyForm Noncommercial License 1.0.0](LICENSE)（SPDX: `PolyForm-Noncommercial-1.0.0`）。
+
+| 允许 | 不允许 |
+| --- | --- |
+| 个人使用、学习、研究、修改（二开）、转载与分发 | 任何商业用途：集成进商业产品、付费部署、代客安装运维、出售等 |
+| 慈善、教育、公共研究、政府等非商业机构使用 | 删除原作者署名 |
+
+**署名要求**：分发本软件的任何部分时，必须同时附上 [LICENSE](LICENSE) 原文（或其 URL），以及 [NOTICE](NOTICE) 中以 `Required Notice:` 开头的那一行。作者：**Danmy Liu**。
+
+> ⚠️ 这不是 OSI 认可的开源许可证。开源定义禁止对商业用途设限，因此本项目属于「源码可见（source-available）」，请勿将本版本称为开源软件。
+
+> **历史版本仍为 MIT，且不可撤销**：v1.0.0 / v1.1.0 及此前全部提交均以 MIT License 发布；已经取得这些版本的人，其依 MIT 获得的权利不因本次变更而收回或缩减，仍可合法商用。本许可证只约束其后发布的版本。
+
+需要商业使用请单独取得书面授权 —— 通过 [GitHub Issues](https://github.com/danmy-liu/conkywin/issues) 联系作者。第三方组件与素材各自保留原许可，见 [THIRD-PARTY.md](THIRD-PARTY.md)。

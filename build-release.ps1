@@ -97,7 +97,7 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish 失败" }
 # 附带文件：示例配置、主题脚本、说明文档
 Copy-Item config.example.json (Join-Path $outDir 'config.json') -Force
 Copy-Item script.harmattan.lua (Join-Path $outDir 'script.lua') -Force
-Copy-Item README.md, LICENSE $outDir -Force
+Copy-Item README.md, LICENSE, NOTICE, THIRD-PARTY.md $outDir -Force
 
 # 天气图标等资源：增量 publish 会清空目标目录，却可能因为「已是最新」不重拷 None/Content，
 # 结果 assets/icons 变成空目录。这里显式复制一次，保证 zip 与安装包装的都是完整图标。
@@ -120,7 +120,9 @@ Compress-Archive -Path (Join-Path $outDir 'ConkyWin.exe'),
     (Join-Path $outDir 'script.lua'),
     (Join-Path $outDir 'portable.flag'),
     (Join-Path $outDir 'README.md'),
-    (Join-Path $outDir 'LICENSE') `
+    (Join-Path $outDir 'LICENSE'),
+    (Join-Path $outDir 'NOTICE'),
+    (Join-Path $outDir 'THIRD-PARTY.md') `
     -DestinationPath $zip -Force
 $zipSize = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 

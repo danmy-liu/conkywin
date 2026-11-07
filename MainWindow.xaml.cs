@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -35,6 +36,14 @@ namespace ConkyWin
         private DateTime _lastNetSample = DateTime.MinValue;
         private DateTime _lastDiskSample = DateTime.MinValue;
         private int _gpuTick = 0;
+        private volatile bool _gpuBusy;      // 上一次采样还没回来，跳过本轮，避免任务堆积
+        private bool _gpuGaveUp;            // 连续采样失败（无 N 卡 / 无 nvidia-smi）后不再起进程
+        private int _gpuMisses;
+
+        // 图标解码缓存：PNG 每次 new BitmapImage 都要重新读盘解码，而 RefreshDynRow 每秒调用。
+        // 每个路径只留一条 (mtime, ImageSource)，替换图标文件后下一帧自动生效，字典不会无限增长。
+        private static readonly Dictionary<string, Tuple<long, ImageSource>> IconCache =
+            new Dictionary<string, Tuple<long, ImageSource>>();
         private Config _cfg = new Config();
         private readonly DispatcherTimer _timer;
         private DispatcherTimer _posTimer;
@@ -295,9 +304,9 @@ namespace ConkyWin
                     ProcVal.Foreground = Brush(HC("conky_proc_color", _cfg.Proc.ValueColor, (double)s.Proc));
                 }
 
-                // GPU（nvidia-smi 每 2 秒采样）
+                // GPU（内置面板每 2 秒采样一次，放到后台线程，绝不阻塞 UI）
                 _gpuTick++;
-                if (_gpuTick % 2 == 0) UpdateGpu();
+                if (_gpuTick % 2 == 0) StartGpuSample();
                 if (s.GpuAvailable)
                 {
                     double barPct = GpuBarPct(s);
@@ -434,7 +443,42 @@ namespace ConkyWin
             // GPU 数据由 UpdateGpu（每 2 秒）填充
         }
 
-        private void UpdateGpu()
+        /// <summary>
+        /// 把 nvidia-smi 的同步读取挪到线程池，结果回 UI 线程写快照。
+        /// 原来在 DispatcherTimer.Tick 里直接 Process.Start + ReadToEnd，会把 UI 线程卡住约 200ms，
+        /// 表现为曲线掉帧、面板顿挫；现在最坏情况也只占一个后台线程，不影响界面。
+        /// </summary>
+        private void StartGpuSample()
+        {
+            if (_gpuBusy || _gpuGaveUp) return;
+            _gpuBusy = true;
+            Task.Run(() =>
+            {
+                double[] g = ReadGpu();
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _gpuBusy = false;
+                        if (g == null)
+                        {
+                            _gpuMisses++;
+                            if (_gpuMisses >= 3) _gpuGaveUp = true; // 无 N 卡：连续三次失败后不再起进程
+                            return;
+                        }
+                        _gpuMisses = 0;
+                        _snap.GpuTemp = g[0];
+                        _snap.GpuUtil = Math.Min(100, Math.Max(0, g[1]));
+                        _snap.GpuMemUsedGb = g[2] / 1024.0;
+                        _snap.GpuMemTotalGb = g[3] / 1024.0;
+                        _snap.GpuAvailable = true;
+                    }));
+                }
+                catch { _gpuBusy = false; }
+            });
+        }
+
+        private static double[] ReadGpu()
         {
             try
             {
@@ -443,21 +487,20 @@ namespace ConkyWin
                 { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
                 using (var p = Process.Start(psi))
                 {
+                    if (p == null) return null;
                     string line = p.StandardOutput.ReadToEnd().Trim();
                     var parts = line.Split(',');
-                    if (parts.Length >= 4)
+                    if (parts.Length < 4) return null;
+                    // nvidia-smi 输出与系统区域设置无关，用 InvariantCulture 更稳妥
+                    var ci = CultureInfo.InvariantCulture;
+                    return new[]
                     {
-                        // nvidia-smi 输出与系统区域设置无关，但用 InvariantCulture 更稳妥
-                        var ci = CultureInfo.InvariantCulture;
-                        _snap.GpuTemp = double.Parse(parts[0].Trim(), ci);
-                        _snap.GpuUtil = Math.Min(100, Math.Max(0, double.Parse(parts[1].Trim(), ci)));
-                        _snap.GpuMemUsedGb = double.Parse(parts[2].Trim(), ci) / 1024.0;
-                        _snap.GpuMemTotalGb = double.Parse(parts[3].Trim(), ci) / 1024.0;
-                        _snap.GpuAvailable = true;
-                    }
+                        double.Parse(parts[0].Trim(), ci), double.Parse(parts[1].Trim(), ci),
+                        double.Parse(parts[2].Trim(), ci), double.Parse(parts[3].Trim(), ci)
+                    };
                 }
             }
-            catch { }
+            catch { return null; }
         }
 
         private static string FormatRate(double kbPerSec)
@@ -466,11 +509,26 @@ namespace ConkyWin
             return kbPerSec.ToString("0") + "K";
         }
 
+        private const long LogMaxBytes = 1024 * 1024; // 1 MB
+
         private static void Log(string msg)
         {
             try
             {
-                File.AppendAllText(AppPaths.LogPath,
+                string path = AppPaths.LogPath;
+                // 正常只有事件会写日志，但「找不到 C 盘」这类错误在每秒 Update() 里，
+                // 一旦触发会无限追加；超过 1 MB 轮转一次，避免长时间运行撑爆磁盘。
+                try
+                {
+                    var fi = new FileInfo(path);
+                    if (fi.Exists && fi.Length > LogMaxBytes)
+                    {
+                        File.Copy(path, path + ".old", true);
+                        File.WriteAllText(path, "");
+                    }
+                }
+                catch { }
+                File.AppendAllText(path,
                     DateTime.Now.ToString("HH:mm:ss") + " " + msg + Environment.NewLine);
             }
             catch { }
@@ -857,7 +915,7 @@ namespace ConkyWin
             fillPts.Add(new Point(0, h));
         }
 
-        /// <summary>加载图标 PNG（相对路径基于 exe 目录；OnLoad 立即读入避免文件锁）。</summary>
+        /// <summary>加载图标 PNG（相对路径基于数据目录；OnLoad 立即读入避免文件锁，按 mtime 缓存）。</summary>
         private static ImageSource LoadIcon(string path)
         {
             if (string.IsNullOrEmpty(path)) return null;
@@ -865,13 +923,20 @@ namespace ConkyWin
             {
                 string full = AppPaths.AssetPath(path);
                 if (!File.Exists(full)) return null;
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(full);
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
+                long ticks = File.GetLastWriteTimeUtc(full).Ticks;
+                lock (IconCache)
+                {
+                    if (IconCache.TryGetValue(full, out Tuple<long, ImageSource> hit) && hit.Item1 == ticks)
+                        return hit.Item2;
+                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bmp.UriSource = new Uri(full);
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    IconCache[full] = Tuple.Create(ticks, (ImageSource)bmp);
+                    return bmp;
+                }
             }
             catch { return null; }
         }

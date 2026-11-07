@@ -1,11 +1,28 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Windows;
 
 namespace ConkyWin
 {
     public partial class App : Application
     {
+        // 静态字段保活到进程退出；Local\ 限定当前登录会话，不同 Windows 用户互不干扰
+        private static Mutex _panelMutex;
+
+        /// <summary>
+        /// 只允许一个「桌面面板」实例。--selftest（CI 自测）与 --settings（只开设置窗口）
+        /// 不受此限制，否则已有面板时自测会被挡住、设置快捷方式也打不开。
+        /// </summary>
+        private static bool AcquirePanelMutex()
+        {
+            try
+            {
+                _panelMutex = new Mutex(true, @"Local\ConkyWin.Panel.v1", out bool createdNew);
+                return createdNew;
+            }
+            catch { return true; } // 拿不到 Mutex 也照常启动，宁可偶尔多开不能起不来
+        }
         /// <summary>
         /// 自己创建主窗口（不用 StartupUri），这样命令行参数可以直接改成自测 / 只开设置窗口。
         /// 正常双击运行走最后分支，行为与原来一致。
@@ -16,6 +33,17 @@ namespace ConkyWin
 
             foreach (string a in e.Args)
             {
+                // --selftest-core：只跑纯逻辑断言，不构造任何 WPF 窗口，供无桌面的 CI 环境当发版门禁
+                if (string.Equals(a, "--selftest-core", StringComparison.OrdinalIgnoreCase))
+                {
+                    string core;
+                    try { core = ConfigStore.SelfTest(); }
+                    catch (Exception ex) { core = "自测本身异常：\r\n" + ex; }
+                    try { File.WriteAllText(ConkyWin.AppPaths.SelfTestLogPath, core); }
+                    catch { }
+                    Shutdown();
+                    return;
+                }
                 // --selftest：不打开任何窗口，跑配置读写 / 脚本语法检查并写 selftest.log
                 if (string.Equals(a, "--selftest", StringComparison.OrdinalIgnoreCase))
                 {
@@ -85,6 +113,9 @@ namespace ConkyWin
                     return;
                 }
             }
+
+            // 已有面板实例：静默退出（托盘图标已经在那里，不再弹窗打扰）
+            if (!AcquirePanelMutex()) { Shutdown(); return; }
 
             var w = new MainWindow();
             MainWindow = w;

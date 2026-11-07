@@ -1,0 +1,32 @@
+ConkyWin — Notice
+=================
+
+Required Notice: Copyright (c) 2026 Danmy Liu (https://github.com/danmy-liu/conkywin)
+
+The line above beginning with "Required Notice:" must be kept and passed on
+to anyone who receives a copy of any part of this software, together with a
+copy of the LICENSE (or its URL), as required by the Notices section of the
+PolyForm Noncommercial License 1.0.0.
+
+中文说明
+--------
+
+1. 自 v1.2.0 起，ConkyWin 采用 PolyForm Noncommercial License 1.0.0
+   （SPDX: PolyForm-Noncommercial-1.0.0）。允许个人使用、学习、研究、
+   修改、转载与分发，但**不允许任何商业用途**；分发时必须保留本文件的
+   Required Notice 行与 LICENSE 原文（或其 URL）。
+
+2. 这不是 OSI 认可的开源许可证。按开源定义第 6 条，限制商业用途的许可
+   不属于开源许可，因此本项目应称为「源码可见（source-available）」，
+   请勿将本版本描述为开源软件。第三方组件各自的许可见 THIRD-PARTY.md，
+   不受本许可证替代。
+
+3. **历史版本仍为 MIT，且不可撤销。** v1.0.0 与 v1.1.0（以及这两个
+   标签之前的全部提交）均以 MIT License 发布；已经取得这些版本的人，
+   其依 MIT 获得的权利不因本文件而收回或缩减，仍可合法商用。
+   本许可证只适用于其后发布的版本。
+
+4. 商业授权：版权人保留单独授予商业许可的权利。需要商业使用（包括
+   集成进商业产品、付费部署、代客安装运维等）请通过仓库
+   https://github.com/danmy-liu/conkywin 的 Issues 联系作者
+   Danmy Liu 取得书面授权。

@@ -1,7 +1,7 @@
 ; ConkyWin 安装脚本（Inno Setup 6.5+，简体中文向导）
 ;
 ; 由 build-release.ps1 调用：
-;   ISCC.exe /DPkgVer=1.1.0 /DPkgDir=ConkyWin-1.1.0-win-x64 installer\installer.iss
+;   ISCC.exe /DPkgVer=1.2.0 /DPkgDir=ConkyWin-1.2.0-win-x64 installer\installer.iss
 ; 也可以直接双击本文件用 Inno Setup 编译器打开，会用下面的默认值。
 ; 注意：宏名不能用 Ver —— 会覆盖 ISPP 内置的 VER（编译器版本常量）。
 ; ChineseSimplified.isl 取自 Inno Setup 官方仓库 jrsoftware/issrc 的简体中文翻译
@@ -14,7 +14,7 @@
 ; 3. 桌面 / 开始菜单快捷方式、开机自启、安装后启动都在「选择附加任务」页可勾选。
 
 #ifndef PkgVer
-  #define PkgVer "1.1.0"
+  #define PkgVer "1.2.0"
 #endif
 #ifndef PkgDir
   #define PkgDir "ConkyWin-1.0.0-win-x64"
@@ -83,6 +83,8 @@ Source: "..\dist\{#PkgDir}\config.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\{#PkgDir}\script.lua"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\{#PkgDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\{#PkgDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\{#PkgDir}\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\{#PkgDir}\THIRD-PARTY.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 安装版标记：程序看到它就改用 %LOCALAPPDATA%\ConkyWin 作为可写数据目录
 Source: "installed.flag"; DestDir: "{app}"; Flags: ignoreversion
 
